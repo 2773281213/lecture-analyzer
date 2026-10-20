@@ -47,34 +47,34 @@ uv run lec models --remote gemini   # 列出服务端可用型号，用来填写
 
 ```bash
 # 1. 建课程（一本书）：学科、授课语言（ISO 639 代码，任何语言都可以）；可附上课程提示词。笔记和分析一律用中文
-uv run lec course add 药理学 --subject 药理学 --teaching zh
-uv run lec course add 病毒学 --subject 病毒学 --teaching ko --interpreted-to zh   # 韩语授课、现场翻译成中文
-uv run lec course add Biology --subject Biology --teaching en,fr                 # 老师混用英语和法语
-uv run lec course set 病毒学 --instructions-file "D:\录课\病毒学提示词.txt"
+uv run lec course add 示例课程 --subject 计算机 --teaching zh
+uv run lec course add 示例课程-外语 --subject 语言学 --teaching ko --interpreted-to zh   # 外语授课、现场翻译成中文
+uv run lec course add Biology --subject Biology --teaching en,fr                         # 老师混用多种语言
+uv run lec course set 示例课程 --instructions-file "D:\资料\课程提示词.txt"
 
 # 2. 课件：分析开始前必须先选择是否提供课件。提供了就导入，处理时自动匹配到各讲；没有就声明不提供
-uv run lec material add 病毒学 "D:\资料\病毒学课件.zip" --kind slides     # 文件、文件夹、zip/rar/7z 都可以
-uv run lec course set 微生物 --no-slides
+uv run lec material add 示例课程 "D:\课件\课件.zip" --kind slides     # 文件、文件夹、zip/rar/7z 都可以
+uv run lec course set 示例课程-无课件 --no-slides
 
 # 3. 加讲：原始音视频不会被复制，只记录路径；一讲有多节就重复 --media
-uv run lec lecture add 药理学 --seq 3 --media "D:\录课\药理学3.m4a"
-uv run lec lecture add 病毒学 --seq 1 --media 病毒学1.1.mp4 --media 病毒学1-2.mp4 --media 病毒学1-3.mp4
-uv run lec lecture add-part 病毒学 1 --media 病毒学1-4.mp4    # 追加一节，已转写的节不会重新转写
+uv run lec lecture add 示例课程 --seq 1 --media "D:\录课\第1讲.m4a"
+uv run lec lecture add 示例课程 --seq 2 --media 第2讲-1.mp4 --media 第2讲-2.mp4
+uv run lec lecture add-part 示例课程 2 --media 第2讲-3.mp4    # 追加一节，已转写的节不会重新转写
 
 # 4. 处理：抽音频 → 转写 → 匹配课件 → 整理笔记 → 校验原话 → 整合课程记忆 → 上架，中断后再运行会接着做
-uv run lec run 病毒学              # 按讲次依次处理所有没完成的讲
-uv run lec lecture pages 病毒学 1 --pages "3:1-30"   # 自动匹配不准时手动指定（资料编号:起止页）
-uv run lec run 药理学 3 --force extract --model gemini   # 换个模型重新整理笔记（依赖它的步骤自动重跑）
-uv run lec rebuild 病毒学 --from 2  # 从第 2 讲起重新整合课程记忆（前面的讲直接重放已有结果）
+uv run lec run 示例课程              # 按讲次依次处理所有没完成的讲
+uv run lec lecture pages 示例课程 1 --pages "1:1-30"   # 自动匹配不准时手动指定（资料编号:起止页）
+uv run lec run 示例课程 2 --force extract --model gemini   # 换个模型重新整理笔记（依赖它的步骤自动重跑）
+uv run lec rebuild 示例课程 --from 2  # 从第 2 讲起重新整合课程记忆（前面的讲直接重放已有结果）
 
 # 5. 复习资料：往年真题、模拟题、习题、复习提纲、考试通知，导入后拆成题目并对应到课程知识点
-uv run lec material add 病毒学 "D:\资料\期中模拟题.pdf" --kind mock_exam
-uv run lec material list 病毒学
+uv run lec material add 示例课程 "D:\资料\期中模拟题.pdf" --kind mock_exam
+uv run lec material list 示例课程
 
 # 6. 总复习与考前报告
-uv run lec review 病毒学                              # 按章节生成复习讲义，内容没变的章节不会重复生成
-uv run lec report 病毒学 --models claude,gemini       # 多个模型分别排名后取共识，列出考点和要点
-uv run lec report 病毒学 --lectures 1,2 --materials 12   # 只分析部分讲和部分资料
+uv run lec review 示例课程                              # 按章节生成复习讲义，内容没变的章节不会重复生成
+uv run lec report 示例课程 --models claude,gemini       # 多个模型分别排名后取共识，列出考点和要点
+uv run lec report 示例课程 --lectures 1,2 --materials 1   # 只分析部分讲和部分资料
 
 # 7. 打开书架：桌面窗口（与安装版相同），或在浏览器里打开（没有原生的选文件对话框，手动粘贴完整路径）
 uv run lec desktop
@@ -82,7 +82,7 @@ uv run lec serve
 
 # 其他
 uv run lec lecture list                       # 各讲的处理进度
-uv run lec lecture move 微生物 3 --to 病毒学    # 把放错课程的一讲移过去
+uv run lec lecture move 课程A 3 --to 课程B     # 把放错课程的一讲移过去
 uv run lec cost                               # 按步骤和模型汇总 token 用量与估算费用
 ```
 
