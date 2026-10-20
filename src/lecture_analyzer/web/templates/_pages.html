@@ -1,0 +1,4 @@
+{# 课件页码：笔记里的 P1、P2… 链接到课程资料里对应页的图片，悬停显示出处 #}
+{% macro slide_pages(pages, links) -%}
+{% for p in pages %}{% set link = links.get(p) %}{% if link %}<a class="page-link" href="{{ link.url }}" title="{{ link.label }}">P{{ p }}</a>{% else %}P{{ p }}{% endif %}{% if not loop.last %}、{% endif %}{% endfor %}
+{%- endmacro %}

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ material.title }} · {{ course.name }} · 课程书架{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="/static/reader.js?v={{ static_version }}"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMath()"></script>
+{% endblock %}
+{% from "_forms.html" import csrf_field %}
+{% block nav %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 课程资料</span>{% endblock %}
+{% block body %}
+<main class="course-page" style="--spine: {{ spine }}">
+  <header class="book-head">
+    <p class="eyebrow">{{ material.kind_label }} · 编号 {{ material.id }}</p>
+    <h1>{{ material.title }}</h1>
+    <p class="meta">{{ material.page_count }} 页 · 来源：{{ material.source }}</p>
+    {% if lectures %}
+    <p class="kp-memory">用到这份资料的讲：{% for l in lectures %}<a class="appear" href="/lectures/{{ l.id }}">第{{ l.seq }}讲</a>{% endfor %}</p>
+    {% endif %}
+    <div class="head-actions">
+      {% if unfinished %}
+      <form method="post" action="/courses/{{ course.id }}/materials/process" class="inline-form">
+        {{ csrf_field() }}<button class="button">继续处理</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/materials/{{ material.id }}/delete" class="inline-form" data-confirm="删除「{{ material.title }}」及其识别结果和题目？原文件不受影响。">
+        {{ csrf_field() }}<button class="button button-danger">删除这份资料</button>
+      </form>
+    </div>
+  </header>
+
+  {% if items %}
+  <section class="block" id="items">
+    <h2>题目与条目（{{ items | length }}）</h2>
+    {% if stale %}<p class="notice">课程记忆有更新，这些题目与知识点的对应待更新：生成考前报告或总复习时会自动更新。</p>{% endif %}
+    {% for item, kps in items %}
+    <article class="card">
+      <header class="card-head">
+        <h3>{{ item.label or ("第 " ~ item.idx ~ " 条") }}</h3>
+        <span class="card-meta">{{ ITEM_TYPES.get(item.item_type, "其他") }}{% if item.score %} · {{ "%g" | format(item.score) }} 分{% endif %} · 第 {{ item.pages | join("、") }} 页</span>
+      </header>
+      <div class="prose">{{ item.content_md | md }}</div>
+      {% if item.answer_md %}<details class="solution"><summary>资料上的答案</summary><div class="prose">{{ item.answer_md | md }}</div></details>{% endif %}
+      {% if kps %}<p class="kp-memory">{% for key, name in kps %}<a class="appear" href="/courses/{{ course.id }}#k-{{ key }}">K{{ key }} {{ name }}</a>{% endfor %}</p>{% endif %}
+    </article>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section class="block" id="pages">
+    <h2>页面</h2>
+    <ol class="page-list">
+      {% for page, has_image in pages %}
+      <li>
+        <span class="chapter-seq">第 {{ page.page_no }} 页</span>
+        {% if has_image %}<a class="page-link" href="/materials/{{ material.id }}/pages/{{ page.page_no }}.png" title="「{{ material.title }}」第 {{ page.page_no }} 页">{{ page.title or "（无标题）" }}</a>{% else %}{{ page.title or "（无标题）" }}{% endif %}
+      </li>
+      {% else %}
+      <li class="muted">还没有识别页面：点上面的「继续处理」</li>
+      {% endfor %}
+    </ol>
+  </section>
+</main>
+{% endblock %}

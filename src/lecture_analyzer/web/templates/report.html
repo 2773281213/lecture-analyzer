@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% from "_forms.html" import csrf_field %}
+{% block title %}{{ report.title }} · {{ course.name }} · 课程书架{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="/static/reader.js?v={{ static_version }}"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMath()"></script>
+{% endblock %}
+{% block nav %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 考前报告</span>{% endblock %}
+{% block body %}
+{# M4 修订：只给判断后的知识点本身（名称、星级、可能题型、要点），不显示理由、分数、模型名次和原话 #}
+<main class="course-page report" style="--spine: {{ spine }}">
+  <header class="book-head">
+    <p class="eyebrow">{{ course.name }} · 考前报告</p>
+    <h1>{{ report.title }}</h1>
+    <p class="meta">
+      范围：{% if result.scope.lectures %}第 {{ result.scope.lectures | join("、") }} 讲{% else %}全部讲{% endif %}；{% if result.scope.materials %}{{ result.scope.materials | join("、") }}{% else %}全部资料{% endif %}
+      · 模型：{% for m in result.models %}{{ m.profile }}（{{ m.model or "失败" }}）{% if not loop.last %}、{% endif %}{% endfor %}
+    </p>
+    <p class="head-actions no-print">
+      <button class="button" type="button" onclick="window.print()">打印 / 另存为 PDF</button>
+      <a class="pill" href="/reports/{{ report.id }}/markdown">下载 Markdown</a>
+      <a class="pill" href="/courses/{{ course.id }}#analysis">返回课程</a>
+    </p>
+    <p class="muted small">按可能考到的程度排列。{{ legend }}</p>
+  </header>
+
+  {% for warning in result.warnings %}<p class="notice">注意：{{ warning }}</p>{% endfor %}
+
+  {% if legacy %}
+  <p class="notice">这是旧版报告，只保留了考点名称；重新生成可得到知识点要点。</p>
+  <ol>{% for row in result.priorities %}<li>{{ row.name }}</li>{% endfor %}</ol>
+  {% else %}
+  {% for point in result.points %}
+  <article class="card report-point" id="p-{{ point.key }}">
+    <header class="card-head">
+      <div class="entry-title">
+        <h3>{{ point.rank }}. {{ point.name }}</h3>
+        {% with row = point %}{% include "_priority.html" %}{% endwith %}
+      </div>
+      {% if point.types %}<span class="card-meta">可能题型：{{ point.types | join("、") }}</span>{% endif %}
+    </header>
+    <div class="prose">{{ point.summary_md | md }}</div>
+    <p class="small no-print"><a class="appear" href="/courses/{{ course.id }}#k-{{ point.key }}">在课程里查看出处</a></p>
+  </article>
+  {% endfor %}
+  {% if result.excluded %}
+  <section class="block" id="excluded">
+    <h2>不考的知识点</h2>
+    <ul>{% for item in result.excluded %}<li>{{ item.name }}</li>{% endfor %}</ul>
+  </section>
+  {% endif %}
+  {% endif %}
+
+  <section class="block danger-zone no-print">
+    <form method="post" action="/reports/{{ report.id }}/delete" class="inline-form" data-confirm="删除这份考前报告？导出的 Markdown 也会删除。">
+      {{ csrf_field() }}<button class="button button-quiet">删除这份报告</button>
+    </form>
+  </section>
+</main>
+{% endblock %}

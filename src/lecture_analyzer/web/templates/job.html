@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% from "_forms.html" import csrf_field, state_chip %}
+{% block title %}{{ job.label }} · 课程书架{% endblock %}
+{% block nav %}{% if course %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a>{% endif %}<span class="topbar-note">· 后台任务</span>{% endblock %}
+{% block body %}
+<main class="course-page" style="--spine: {{ spine }}">
+  <header class="book-head">
+    <p class="eyebrow">{% if course %}{{ course.name }} · {% endif %}任务 #{{ job.id }}</p>
+    <h1>{{ job.label }}</h1>
+    <p class="meta">提交于 {{ job.created_at | replace("T", " ") }}</p>
+  </header>
+  <section class="card job" id="job" data-job="{{ job.id }}" data-state="{{ job.state }}">
+    <p class="job-status">
+      <span id="job-state">{{ state_chip(job.state) }}</span>
+      <span id="job-progress">{{ job.result.summary if job.state == "done" and job.result.summary else job.progress }}</span>
+    </p>
+    <p class="job-error" id="job-error"{% if not job.error %} hidden{% endif %}>{{ job.error }}</p>
+    <ul class="job-warnings" id="job-warnings"{% if not job.result.warnings %} hidden{% endif %}>
+      {% for warning in job.result.warnings or [] %}<li>{{ warning }}</li>{% endfor %}
+    </ul>
+    <p id="job-result"{% if not (job.state == "done" and job.result.url) %} hidden{% endif %}>
+      <a class="button" id="job-link" href="{{ job.result.url or '#' }}">查看结果</a>
+    </p>
+    {% if not job.finished %}
+    <form method="post" action="/jobs/{{ job.id }}/cancel" id="job-cancel" data-confirm="取消这个任务？已完成的步骤会保留，下次接着做。">
+      {{ csrf_field() }}<button class="button button-quiet">取消任务</button>
+    </form>
+    {% endif %}
+    <p class="muted small">任务在后台运行，可以离开本页，在顶栏的「后台任务」里查看；关闭书架程序会中断任务，再次提交时已完成的步骤不会重做。</p>
+  </section>
+  <p>{% if course %}<a class="pill" href="/courses/{{ course.id }}">返回课程</a> {% endif %}<a class="pill" href="/jobs">全部任务</a></p>
+</main>
+{% endblock %}

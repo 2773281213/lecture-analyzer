@@ -1,0 +1,26 @@
+{# 考前报告和问答里的一条证据：原话、笔记要点、转写片段、例题（链接到录音的时间点）、资料题目、课件页（页内查看图片） #}
+{% macro evidence_item(view) -%}
+{% set kind = view.id[0] %}
+<li class="evidence">
+  <span class="evidence-id">{{ view.id }}</span>
+  {% if kind == "Q" %}
+  <span class="sig sig-{{ view.type }}">{{ view.label }}</span>{{ quote_html(view.quote, view.meaning) }}
+  <a class="appear" href="/lectures/{{ view.lecture_id }}{% if view.t is not none %}?t={{ view.t }}{% endif %}">第{{ view.seq }}讲{% if view.t is not none %} {{ view.t | ts }}{% endif %}</a>
+  {% elif kind == "M" %}
+  <a href="/materials/{{ view.material_id }}">「{{ view.title }}」{{ view.label }}</a><span class="muted">（{{ view.type }}）</span>
+  <div class="prose evidence-body">{{ view.content_md | md }}</div>
+  {% elif kind == "P" %}
+  <a class="page-link" href="/materials/{{ view.material_id }}/pages/{{ view.page_no }}.png" title="课件 {{ view.label }}">课件 {{ view.label }}</a>{% if view.title %}<span class="muted">：{{ view.title }}</span>{% endif %}
+  {% elif kind == "N" %}
+  笔记「{{ view.name }}」
+  <a class="appear" href="/lectures/{{ view.lecture_id }}{% if view.t is not none %}?t={{ view.t }}{% endif %}">第{{ view.seq }}讲{% if view.t is not none %} {{ view.t | ts }}{% endif %}</a>
+  <details class="evidence-body"><summary class="small">展开要点</summary><div class="prose">{{ view.summary_md | md }}</div></details>
+  {% elif kind == "T" %}
+  <a class="appear" href="/lectures/{{ view.lecture_id }}{% if view.t is not none %}?t={{ view.t }}{% endif %}">第{{ view.seq }}讲{% if view.t is not none %} {{ view.t | ts }}{% endif %}</a>
+  <details class="evidence-body"><summary class="small">转写原文</summary><p class="quote-text">{{ view.text }}</p></details>
+  {% else %}
+  例题「{{ view.title }}」
+  <a class="appear" href="/lectures/{{ view.lecture_id }}{% if view.t is not none %}?t={{ view.t }}{% endif %}">第{{ view.seq }}讲{% if view.t is not none %} {{ view.t | ts }}{% endif %}</a>
+  {% endif %}
+</li>
+{%- endmacro %}

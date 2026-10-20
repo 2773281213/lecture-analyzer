@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}出错了 · 课程书架{% endblock %}
+{% block body %}
+<main class="library">
+  <section class="empty">
+    <h1>出错了</h1>
+    <p>{{ message }}</p>
+    <p><a class="button" href="javascript:history.back()">返回上一页</a> <a class="pill" href="/">回到书架</a></p>
+  </section>
+</main>
+{% endblock %}

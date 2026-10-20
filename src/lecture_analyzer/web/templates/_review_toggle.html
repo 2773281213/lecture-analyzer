@@ -1,0 +1,12 @@
+{# 知识点的"已复习"开关。需要：course、toggle_name（归一化名称）、toggle_key、toggle_reviewed、back（course / review） #}
+<form method="post" action="/courses/{{ course.id }}/reviewed" class="review-toggle">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="name" value="{{ toggle_name }}">
+  <input type="hidden" name="key" value="{{ toggle_key }}">
+  <input type="hidden" name="back" value="{{ back }}">
+  <input type="hidden" name="reviewed" value="{{ '0' if toggle_reviewed else '1' }}">
+  <button type="submit" class="check" aria-pressed="{{ 'true' if toggle_reviewed else 'false' }}"
+          title="{{ '已复习，点击取消' if toggle_reviewed else '标记为已复习' }}" aria-label="{{ '取消已复习' if toggle_reviewed else '标记为已复习' }}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+  </button>
+</form>

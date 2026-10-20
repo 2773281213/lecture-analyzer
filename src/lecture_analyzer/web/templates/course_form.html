@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "_forms.html" import csrf_field %}
+{% block title %}{{ ("课程设置 · " ~ course.name) if course else "新建课程" }} · 课程书架{% endblock %}
+{% block nav %}{% if course %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 课程设置</span>{% else %}<span class="topbar-note">新建课程</span>{% endif %}{% endblock %}
+{% block body %}
+<main class="course-page" style="--spine: {{ spine }}">
+  <header class="book-head">
+    <p class="eyebrow">{{ course.name if course else "一门课是一本书，一讲是书里的一章" }}</p>
+    <h1>{{ "课程设置" if course else "新建课程" }}</h1>
+  </header>
+
+  {% if saved %}
+  <div class="notice">
+    <p>已保存。{% if not rerun %}已处理的讲不需要重做。{% endif %}</p>
+    {% if rerun %}
+    <form method="post" action="/courses/{{ course.id }}/run" class="form-actions">
+      {{ csrf_field() }}<input type="hidden" name="force" value="{{ rerun }}">
+      <span>已经处理过的讲要按新设置从「{{ rerun_label }}」起重做：</span>
+      <button class="button">按新设置重新处理所有讲</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <form method="post" action="{{ ('/courses/' ~ course.id ~ '/settings') if course else '/courses' }}" class="form-card">
+    {{ csrf_field() }}
+    {% if not course %}
+    <label class="field"><span class="field-label">课程名</span>
+      <input name="name" required maxlength="60" placeholder="如：病毒学" autofocus></label>
+    {% endif %}
+    <label class="field"><span class="field-label">学科</span>
+      <input name="subject" maxlength="40" value="{{ defaults.subject }}" placeholder="写进提示词，如 病毒学、药理学"></label>
+    <fieldset class="field">
+      <legend class="field-label">授课语言（老师讲课用的语言；混用几种就都勾上）</legend>
+      <div class="check-row">
+        {% for code in COMMON_LANGUAGES %}<label class="check-label"><input type="checkbox" name="teaching" value="{{ code }}"{{ " checked" if code in defaults.languages }}> {{ LANGUAGE_NAMES[code] }}</label>{% endfor %}
+      </div>
+      <label class="field"><span class="field-label">其他语言（可选，写语言代码，如 fr 法语、de 德语，多个用逗号分隔）</span>
+        <input name="teaching_other" maxlength="60" value="{{ teaching_other }}" list="languages"></label>
+    </fieldset>
+    <datalist id="languages">{% for code, name in LANGUAGE_NAMES.items() %}<option value="{{ code }}">{{ name }}</option>{% endfor %}</datalist>
+    <label class="field"><span class="field-label">现场翻译成</span>
+      <select name="interpreted_to">
+        <option value="">没有现场翻译</option>
+        {% for code in COMMON_LANGUAGES %}<option value="{{ code }}"{{ " selected" if code == defaults.interpreted_to }}>{{ LANGUAGE_NAMES[code] }}</option>{% endfor %}
+        {% if defaults.interpreted_to and defaults.interpreted_to not in COMMON_LANGUAGES %}<option value="{{ defaults.interpreted_to }}" selected>{{ LANGUAGE_NAMES.get(defaults.interpreted_to, defaults.interpreted_to) }}</option>{% endif %}
+      </select></label>
+    <p class="muted small">笔记、课程记忆、总复习、考前报告和问答一律用中文。老师讲韩语、有人现场翻译成中文时：授课语言勾「韩语」，现场翻译选「中文」。</p>
+    <label class="field"><span class="field-label">转写方案</span>
+      <select name="asr">
+        {% for value, label in asr_choices.items() %}<option value="{{ value }}"{{ " selected" if value == current_asr }}>{{ label }}</option>{% endfor %}
+      </select></label>
+    {% if not course %}
+    <fieldset class="field">
+      <legend class="field-label">课件</legend>
+      <label class="check-label"><input type="radio" name="slides" value="unset" checked> 有课件（建好课程后导入，会自动匹配到各讲）</label>
+      <label class="check-label"><input type="radio" name="slides" value="none"> 这门课没有课件</label>
+    </fieldset>
+    {% endif %}
+    <label class="field"><span class="field-label">课程提示词（可选）</span>
+      <textarea name="instructions" rows="5" maxlength="4000" placeholder="告诉模型这门课的特点，例如：老师常考名词解释；实验步骤要记清顺序">{{ course.instructions if course else "" }}</textarea></label>
+    <p class="form-actions">
+      <button class="button">{{ "保存设置" if course else "建立课程" }}</button>
+      <a class="pill" href="{{ ('/courses/' ~ course.id) if course else '/' }}">返回</a>
+    </p>
+  </form>
+
+  {% if course %}
+  <section class="block danger-zone">
+    <h2>删除课程</h2>
+    <p>删除书库里这门课的讲、转写、笔记、课程记忆、资料副本、考前报告和问答。原始音视频不会删除。</p>
+    <form method="post" action="/courses/{{ course.id }}/delete" class="inline-form" data-confirm="确定删除「{{ course.name }}」的全部数据吗？">
+      {{ csrf_field() }}
+      <input name="confirm" required autocomplete="off" placeholder="输入「{{ course.name }}」确认" aria-label="输入课程名确认删除">
+      <button class="button button-danger">删除这门课</button>
+    </form>
+  </section>
+  {% endif %}
+</main>
+{% endblock %}

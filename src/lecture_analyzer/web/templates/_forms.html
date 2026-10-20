@@ -1,0 +1,52 @@
+{# 表单里常用的部件 #}
+{% macro csrf_field() -%}<input type="hidden" name="csrf" value="{{ csrf_token }}">{%- endmacro %}
+
+{# 本机路径，每行一个。桌面程序里用原生对话框选择（pick：files 多个文件、file 一个文件、folder 文件夹、any 文件或文件夹；
+   types：对话框里的文件类型）；在浏览器里打开书架时没有对话框，手动粘贴完整路径。
+   key：页面上唯一的名字（同一页有几个路径框时用来区分，选择按钮按它找到要填的框）。 #}
+{% macro paths_field(name, label, pick="files", types="", required=true, rows=3, hint="", key="") -%}
+{% set field_id = "field-" ~ (key or name) %}
+<div class="field">
+  <label class="field-label" for="{{ field_id }}">{{ label }}</label>
+  <textarea id="{{ field_id }}" name="{{ name }}" rows="{{ rows }}" spellcheck="false"{{ " required" if required }}
+            placeholder="每行一个完整路径，如 D:\录课\第1讲-1.mp4"></textarea>
+  <span class="field-actions native-only">
+    {% if pick in ("files", "file", "any") %}<button type="button" class="pill" data-pick="{{ 'file' if pick == 'file' else 'files' }}" data-types="{{ types }}" data-target="{{ field_id }}">选择文件…</button>{% endif %}
+    {% if pick in ("folder", "any") %}<button type="button" class="pill" data-pick="folder" data-target="{{ field_id }}">选择文件夹…</button>{% endif %}
+    {% if hint %}<span class="muted small">{{ hint }}</span>{% endif %}
+  </span>
+  <span class="field-actions browser-only muted small">在资源管理器里选中文件，按住 Shift 右键选「复制文件地址」，粘贴到这里。{{ hint }}</span>
+</div>
+{%- endmacro %}
+
+{# 处理讲时从哪一步起重做 #}
+{% macro force_select(name="force") -%}
+<select name="{{ name }}" aria-label="从哪一步起处理">
+  <option value="">接着处理（已完成的步骤不重做）</option>
+  {% for step, label in RUN_STEPS %}<option value="{{ step }}">从「{{ label }}」起重做</option>{% endfor %}
+  <option value="all">全部重做</option>
+</select>
+{%- endmacro %}
+
+{# 后台任务进行中：显示进度，结束后刷新页面（页面上有没提交的输入时只提示，不自动刷新） #}
+{% macro jobs_panel(jobs) -%}
+{% if jobs %}
+<section class="jobs-panel" aria-live="polite">
+  <p class="field-label">后台任务</p>
+  <ul class="plain-list">
+    {% for job in jobs %}
+    <li data-job-id="{{ job.id }}" data-reload>
+      <a href="/jobs/{{ job.id }}">#{{ job.id }} {{ job.label }}</a>
+      <span class="chip state-running" data-job-state>{{ JOB_STATES.get(job.state, job.state) }}</span>
+      <span class="muted small" data-job-progress>{{ job.progress }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{%- endmacro %}
+
+{# 任务状态的样式名 #}
+{% macro state_chip(state) -%}
+<span class="chip state-{{ {'done': 'done', 'failed': 'failed', 'cancelled': 'skipped'}.get(state, 'running') }}">{{ JOB_STATES.get(state, state) }}</span>
+{%- endmacro %}

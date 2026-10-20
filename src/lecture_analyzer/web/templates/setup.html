@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>课程书架 · 首次设置</title>
+  {# 桌面程序第一次启动、还没有书库时显示（desktop.py 用本地 HTML 打开，没有网页服务）；样式直接嵌入 #}
+  <style>{{ style | safe }}</style>
+  <style>
+    .setup { max-width: 760px; margin: 0 auto; padding: 32px 24px 64px; }
+    .setup .card h2 { margin: 0 0 4px; font: 700 19px var(--font-title); }
+    .setup .card p { margin: 6px 0; }
+    .setup-error { color: var(--danger); white-space: pre-wrap; }
+  </style>
+</head>
+<body class="has-native">
+  <nav class="topbar">
+    <span class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16.2 5.3l3.8-1 3.1 15.5-3.9 1z"/></svg>
+      课程书架
+    </span>
+    <span class="topbar-note">首次设置</span>
+  </nav>
+  <main class="setup">
+    <header class="book-head">
+      <p class="eyebrow">欢迎使用</p>
+      <h1>书库放在哪里？</h1>
+      <p class="meta">书库是一个文件夹，放这台电脑上所有课程的转写、笔记、资料副本和设置。原始的录音录像不会复制进去，只记录位置。</p>
+    </header>
+
+    <section class="card">
+      <h2>新建书库</h2>
+      <p class="small muted">第一次使用选这个。建好后会打开设置页，填写模型和密钥。</p>
+      <label class="field"><span class="field-label">书库文件夹</span>
+        <input id="new-home" value="{{ default_home }}" spellcheck="false"></label>
+      <p class="form-actions">
+        <button type="button" class="pill" id="pick-new">选择位置…</button>
+        <button type="button" class="button" id="create">新建并打开</button>
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>使用已有的书库</h2>
+      <p class="small muted">以前用过课程书架（包括命令行版），选那个书库文件夹（里面有 config.toml），所有课程都会照常打开。</p>
+      <p class="form-actions"><button type="button" class="button button-quiet" id="open-existing">选择书库文件夹…</button></p>
+    </section>
+
+    <p class="setup-error" id="error" role="alert" hidden></p>
+  </main>
+  <script>
+    (function () {
+      "use strict";
+      const error = document.getElementById("error");
+
+      function api() {
+        return new Promise(function (resolve) {
+          if (window.pywebview && window.pywebview.api) return resolve(window.pywebview.api);
+          window.addEventListener("pywebviewready", function () { resolve(window.pywebview.api); }, { once: true });
+        });
+      }
+
+      function busy(on) {
+        document.querySelectorAll("button").forEach(function (button) { button.disabled = on; });
+      }
+
+      async function use(path, create) {
+        error.hidden = true;
+        busy(true);
+        const result = await (await api()).use_home(path, create);
+        if (result && result.error) {  // 成功时窗口会转到书架
+          error.textContent = result.error;
+          error.hidden = false;
+          busy(false);
+        }
+      }
+
+      document.getElementById("pick-new").addEventListener("click", async function () {
+        const path = await (await api()).choose_home();
+        if (path) document.getElementById("new-home").value = path;
+      });
+      document.getElementById("create").addEventListener("click", function () {
+        use(document.getElementById("new-home").value, true);
+      });
+      document.getElementById("open-existing").addEventListener("click", async function () {
+        const path = await (await api()).choose_home();
+        if (path) use(path, false);
+      });
+    })();
+  </script>
+</body>
+</html>

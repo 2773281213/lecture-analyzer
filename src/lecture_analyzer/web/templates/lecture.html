@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+{% from "_pages.html" import slide_pages %}
+{% from "_forms.html" import csrf_field, paths_field, force_select, jobs_panel %}
+{% block title %}{{ course.name }} 第{{ lecture.seq }}讲 · 课程书架{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="/static/reader.js?v={{ static_version }}"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMath()"></script>
+{% endblock %}
+{% block nav %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 第 {{ lecture.seq }} 讲</span>{% endblock %}
+{% block body %}
+<div class="reader" style="--spine: {{ spine }}">
+  <aside class="toc">
+    <p class="toc-label">目录</p>
+    <ol>
+      {% if notes %}
+      <li><a href="#outline">大纲</a></li>
+      {% if references %}<li><a href="#memory">与前几讲的联系</a></li>{% endif %}
+      <li><a href="#knowledge">知识点</a>
+        <ol>{% for kp in notes.knowledge_points %}<li><a href="#kp-{{ loop.index }}">{{ kp.name }}</a></li>{% endfor %}</ol>
+      </li>
+      {% if notes.examples %}<li><a href="#examples">例题与推导</a></li>{% endif %}
+      <li><a href="#homework">作业</a></li>
+      <li><a href="#signals">考点信号</a></li>
+      {% endif %}
+      <li><a href="#transcript">转写全文</a></li>
+      <li><a href="#organize">标签与整理</a></li>
+      <li><a href="#manage">管理这一讲</a></li>
+      <li><a href="#processing">处理记录</a></li>
+    </ol>
+  </aside>
+
+  <main class="page" lang="{{ course.settings.html_lang }}">
+    <div class="player-bar {{ media_kind }}">
+      {% if parts %}
+      <script id="parts-data" type="application/json">{{ parts | tojson }}</script>
+      <div class="player-frame">
+        {% if media_kind == "video" %}
+        <video id="player" controls preload="metadata" src="{{ parts[0].src }}"></video>
+        {% else %}
+        <audio id="player" controls preload="metadata" src="{{ parts[0].src }}"></audio>
+        {% endif %}
+        {% if total_ms %}
+        {# 多节的讲：整讲一条进度条（原生控件只显示当前这一节），脚本启用后替换原生控件 #}
+        <div class="player-controls" id="player-controls" hidden>
+          <button type="button" class="pc-play">播放</button>
+          <span class="pc-time"><span class="pc-now">00:00</span> / {{ total_ms | ts }}</span>
+          <input type="range" class="pc-seek" min="0" max="{{ total_ms }}" step="1000" value="0" aria-label="整讲进度">
+          <select class="pc-rate" aria-label="播放速度">
+            {% for rate in ("0.75", "1", "1.25", "1.5", "1.75", "2") %}<option value="{{ rate }}"{{ " selected" if rate == "1" }}>{{ rate }}×</option>{% endfor %}
+          </select>
+          <button type="button" class="pc-mute">静音</button>
+          {% if media_kind == "video" %}<button type="button" class="pc-full">全屏</button>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+    <header class="book-head">
+      <p class="eyebrow"><a href="/courses/{{ course.id }}">{{ course.name }}</a> · 第 {{ lecture.seq }} 讲 · {{ KIND_LABELS.get(lecture.kind, lecture.kind) }}</p>
+      <h1>{{ lecture.title or (notes.title if notes else "（标题待生成）") }}</h1>
+      <p class="meta">
+        {{ course.settings.teaching_description }} · 笔记：{{ course.settings.note_language_name }}
+        {% if lecture.duration_ms %} · 时长 {{ lecture.duration_ms | ts }}{% endif %}
+        {% if parts | length > 1 %} · {{ parts | length }} 节{% endif %}
+        {% if model %} · 整理模型 {{ model[1] }}{% endif %}
+        {% for t in tags %}<span class="tag">{{ t }}</span>{% endfor %}
+      </p>
+      {% if matched_pages %}<p class="meta">本讲对应课件（{{ "手动指定" if matched_manual else "自动匹配" }}）：{{ matched_pages }}</p>{% endif %}
+      <div class="head-actions">
+        <form method="post" action="/lectures/{{ lecture.id }}/run" class="inline-form">
+          {{ csrf_field() }}
+          {{ force_select() }}
+          <button class="button">处理</button>
+        </form>
+        {% if notes %}<a class="button button-quiet" href="/courses/{{ course.id }}/qa?lecture={{ lecture.id }}">就这一讲提问</a>{% endif %}
+      </div>
+      {% if memory_state == "stale" %}
+      <form method="post" action="/courses/{{ course.id }}/rebuild" class="notice form-actions">
+        {{ csrf_field() }}
+        <span>前面的讲有更新，这一讲的课程记忆待更新。</span>
+        <button class="button button-quiet">重建课程记忆</button>
+      </form>
+      {% endif %}
+    </header>
+
+    {{ jobs_panel(active_jobs) }}
+
+    {% if not notes %}
+    <section class="notice">这一讲还没有笔记：点上面的「处理」开始（转写、匹配课件、整理笔记、整合课程记忆），在后台进行，完成后本页自动刷新。</section>
+    {% else %}
+    <section id="outline" class="block">
+      <h2>大纲</h2>
+      <ol class="outline">{% for item in notes.outline %}<li>{{ item }}</li>{% endfor %}</ol>
+    </section>
+
+    {% if references %}
+    <section id="memory" class="block">
+      <h2>与前几讲的联系</h2>
+      <ul class="references">
+        {% for ref in references %}
+        <li>
+          <span class="relation">{{ ref.relation }}</span>
+          {% if ref.t is not none %}<button class="time" data-t="{{ ref.t }}">{{ ref.t | ts }}</button>{% endif %}
+          <strong>{{ ref.here }}</strong>
+          <span class="muted">←</span>
+          <a href="/lectures/{{ ref.target_lecture_id }}{% if ref.target_t is not none %}?t={{ ref.target_t }}{% endif %}">第 {{ ref.target_seq }} 讲「{{ ref.target_name }}」{% if ref.target_t is not none %} {{ ref.target_t | ts }}{% endif %}</a>
+          <p class="explanation">{{ ref.explanation }}</p>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <section id="knowledge" class="block">
+      <h2>知识点</h2>
+      {% for kp in notes.knowledge_points %}
+      {% set t = time_of(kp.segment_ids) %}
+      {% set link = kp_links.get(loop.index) %}
+      <article id="kp-{{ loop.index }}" class="card">
+        <header class="card-head">
+          <h3>{{ kp.name }}</h3>
+          <span class="card-meta">
+            {% if t is not none %}<button class="time" data-t="{{ t }}">{{ t | ts }}</button>{% endif %}
+            约 {{ '%g' | format(kp.minutes) }} 分钟{% if kp.slide_pages %} · 课件 {{ slide_pages(kp.slide_pages, page_links) }}{% endif %}
+          </span>
+        </header>
+        {% if link %}
+        <p class="kp-memory">
+          <span class="role">{{ link.role }}</span>
+          <a href="/courses/{{ course.id }}#k-{{ link.key }}">K{{ link.key }} {{ link.name }}</a>{% if link.chapter %}<span class="muted"> · {{ link.chapter }}</span>{% endif %}
+          {% for o in link.others %}<a class="appear" href="/lectures/{{ o.lecture_id }}{% if o.t is not none %}?t={{ o.t }}{% endif %}">第{{ o.seq }}讲·{{ o.role }}</a>{% endfor %}
+        </p>
+        {% endif %}
+        <div class="prose">{{ kp.summary_md | md }}</div>
+      </article>
+      {% endfor %}
+    </section>
+
+    {% if notes.examples %}
+    <section id="examples" class="block">
+      <h2>例题与推导</h2>
+      {% for ex in notes.examples %}
+      {% set t = time_of(ex.segment_ids) %}
+      <article class="card">
+        <header class="card-head">
+          <h3>{{ ex.title }}</h3>
+          <span class="card-meta">{% if t is not none %}<button class="time" data-t="{{ t }}">{{ t | ts }}</button>{% endif %}</span>
+        </header>
+        <div class="prose">{{ ex.problem_md | md }}</div>
+        <details class="solution"><summary>解答</summary><div class="prose">{{ ex.solution_md | md }}</div></details>
+      </article>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    <section id="homework" class="block">
+      <h2>作业</h2>
+      {% if notes.homework %}<ul>{% for item in notes.homework %}<li>{{ item }}</li>{% endfor %}</ul>{% else %}<p class="muted">没有布置作业</p>{% endif %}
+    </section>
+
+    <section id="signals" class="block">
+      <h2>考点信号</h2>
+      <div class="table-wrap">
+        <table class="signals">
+          <thead><tr><th>类型</th><th>知识点</th><th>强度</th><th>时间</th><th>原话</th><th>校验</th></tr></thead>
+          <tbody>
+          {% for item in signals %}
+          {% set t = time_of(item.segment_ids) %}
+          <tr class="{{ 'ok' if item.valid else 'bad' }}">
+            <td><span class="sig sig-{{ item.signal.type }}">{{ SIGNAL_LABELS.get(item.signal.type, item.signal.type) }}</span></td>
+            <td>{{ item.signal.knowledge_point }}</td>
+            <td><span class="strength" aria-label="强度 {{ item.signal.strength }}">{{ "●" * item.signal.strength }}{{ "○" * (3 - item.signal.strength) }}</span></td>
+            <td>{% if t is not none %}<button class="time" data-t="{{ t }}">{{ t | ts }}</button>{% else %}-{% endif %}</td>
+            <td class="quote">{% if item.signal.quote %}{{ quote_html(item.signal.quote, item.signal.meaning) }}{% elif item.signal.slide_pages %}课件 {{ slide_pages(item.signal.slide_pages, page_links) }}{% else %}—{% endif %}</td>
+            <td>{{ "通过" if item.valid else "未找到原话" }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="muted">没有识别到考点信号</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+
+    <details id="transcript" class="block transcript">
+      <summary><h2>转写全文</h2><span class="muted">{{ segments | length }} 句 · 点任意一句跳到对应位置</span></summary>
+      <div class="lines">
+        {% for s in segments %}
+        <p class="line" data-t="{{ s.start_ms }}"><span class="line-time">{{ s.start_ms | ts }}</span>{% if s.lang %}<span class="lang">{{ s.lang }}</span>{% endif %}<span class="line-text">{{ s.text }}</span></p>
+        {% endfor %}
+      </div>
+    </details>
+
+    <section id="organize" class="block">
+      <h2>标签与整理</h2>
+      <div class="organize">
+        <div>
+          <p class="field-label">标签</p>
+          <div class="tag-editor">
+            {% for t in tags %}
+            <form method="post" action="/lectures/{{ lecture.id }}/tags/remove" class="tag-item">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="tag" value="{{ t }}">
+              <span class="tag">{{ t }}<button class="tag-remove" title="删除标签" aria-label="删除标签 {{ t }}">×</button></span>
+            </form>
+            {% endfor %}
+            <form method="post" action="/lectures/{{ lecture.id }}/tags" class="inline-form">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <input name="tag" maxlength="20" required placeholder="如：期末重点" aria-label="新标签">
+              <button class="button">添加</button>
+            </form>
+          </div>
+        </div>
+        {% if other_courses %}
+        <div>
+          <p class="field-label">放错了课程？</p>
+          <form method="post" action="/lectures/{{ lecture.id }}/move" class="inline-form">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}">
+            <select name="course_id" aria-label="移到哪门课">
+              {% for c in other_courses %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+            </select>
+            <input name="seq" inputmode="numeric" pattern="[0-9]*" placeholder="第几讲（可不填）" aria-label="在新课程里是第几讲">
+            <button class="button">移过去</button>
+          </form>
+          <p class="muted small">移动后在这一讲的页面点「处理」重新处理；两门课里排在它后面的讲，课程记忆会标记为待更新。</p>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section id="manage" class="block">
+      <h2>管理这一讲</h2>
+      <div class="organize">
+        <form method="post" action="/lectures/{{ lecture.id }}/edit">
+          {{ csrf_field() }}
+          <p class="field-label">讲的信息</p>
+          <label class="field"><span class="field-label">标题</span><input name="title" maxlength="200" value="{{ lecture.title }}"></label>
+          <div class="field-row">
+            <label class="field"><span class="field-label">类型</span>
+              <select name="kind">{% for key, label in KIND_LABELS.items() %}<option value="{{ key }}"{{ " selected" if key == lecture.kind }}>{{ label }}</option>{% endfor %}</select></label>
+            <label class="field"><span class="field-label">上课日期</span><input name="date" type="date" value="{{ lecture.date }}"></label>
+          </div>
+          <p class="form-actions"><button class="button">保存</button></p>
+        </form>
+
+        <form method="post" action="/lectures/{{ lecture.id }}/parts">
+          {{ csrf_field() }}
+          <p class="field-label">现在共 {{ lecture.parts | length }} 节</p>
+          <ol class="part-files">{% for part in lecture.parts %}<li class="small">{{ part.media_path }}</li>{% endfor %}</ol>
+          {{ paths_field("paths", "追加一节（按顺序接在后面）", pick="files", types="media", rows=2, key="part-paths") }}
+          <p class="form-actions"><button class="button">追加</button><span class="muted small">已转写的节不会重新转写</span></p>
+        </form>
+
+        <div>
+          <p class="field-label">对应的课件页</p>
+          <p class="small">{% if matched_pages %}{{ "手动指定" if matched_manual else "自动匹配" }}：{{ matched_pages }}{% else %}还没有对应的课件页{% endif %}</p>
+          {% if page_materials %}
+          <form method="post" action="/lectures/{{ lecture.id }}/pages" class="inline-form">
+            {{ csrf_field() }}
+            <select name="material" aria-label="资料">{% for m in page_materials %}<option value="{{ m.id }}">{{ m.title }}（{{ m.page_count }} 页）</option>{% endfor %}</select>
+            <input name="pages" placeholder="页码，如 3-30（不填为整份）" aria-label="页码区间">
+            <button class="button">手动指定</button>
+          </form>
+          {% if matched_manual %}
+          <form method="post" action="/lectures/{{ lecture.id }}/pages" class="inline-form">
+            {{ csrf_field() }}<input type="hidden" name="mode" value="auto">
+            <button class="button button-quiet">恢复自动匹配</button>
+          </form>
+          {% endif %}
+          <p class="muted small">改动后点「处理」，按新的课件页重新整理笔记。</p>
+          {% else %}
+          <p class="muted small">课程资料里还没有课件，在<a href="/courses/{{ course.id }}#import-material">课程页</a>导入。</p>
+          {% endif %}
+        </div>
+
+        <form method="post" action="/lectures/{{ lecture.id }}/delete" class="danger-zone" data-confirm="确定删除第 {{ lecture.seq }} 讲吗？">
+          {{ csrf_field() }}
+          <p class="field-label">删除这一讲</p>
+          <p class="small">删除转写、笔记、导出文件和中间文件；原始音视频不会删除。后面整合过的讲会标记为课程记忆待更新。</p>
+          <label class="check-label"><input type="checkbox" name="confirm" value="1" required> 确认删除</label>
+          <p class="form-actions"><button class="button button-danger">删除第 {{ lecture.seq }} 讲</button></p>
+        </form>
+      </div>
+    </section>
+
+    <section id="processing" class="block">
+      <h2>处理记录</h2>
+      <table class="steps">
+        {% for label, info in steps %}
+        {% set state = info.get('state', 'pending') %}
+        <tr><td>{{ label }}</td><td class="state-{{ state }}">{{ STATE_LABELS.get(state, '未开始') }}</td><td class="muted">{{ info.get('detail', '') }}</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+  </main>
+</div>
+{% include "_slides_gate.html" %}
+{% endblock %}

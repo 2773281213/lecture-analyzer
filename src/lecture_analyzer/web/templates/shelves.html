@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block nav %}<span class="topbar-note">{{ books | length }} 本书</span>{% endblock %}
+{% block body %}
+<main class="library">
+  {% if not books %}
+  <section class="empty">
+    <h1>书架还是空的</h1>
+    <p>一门课是一本书，一讲是书里的一章。先新建一门课，再添加录音或录像，处理完成后会自动上架。</p>
+    <p><a class="button" href="/courses/new">新建课程</a> <a class="pill" href="/settings">先去设置模型和密钥</a></p>
+  </section>
+  {% else %}
+  <nav class="shelf-tools" aria-label="排列方式">
+    <span class="muted">排列：</span>
+    {% for key, label in SORTS.items() %}
+    <a class="pill{{ ' is-active' if key == sort }}" href="/?sort={{ key }}">{{ label }}</a>
+    {% endfor %}
+    <span class="topbar-spacer"></span>
+    <a class="button" href="/courses/new">新建课程</a>
+  </nav>
+  <section class="shelf">
+    <div class="shelf-row">
+      {% for b in books %}
+      <article class="book" style="--spine: {{ b.spine }}">
+        <a class="book-link" href="/courses/{{ b.course.id }}">
+          <span class="book-seq">{{ b.course.settings.subject }}</span>
+          <span class="book-title">{{ b.course.name }}</span>
+          <span class="book-meta">{{ b.lectures }} 讲{% if b.duration_ms %} · {{ b.duration_ms | ts }}{% endif %}</span>
+          <span class="book-meta">{{ b.course.settings.teaching_description }}</span>
+          <span class="book-states">
+            {% for key, label, count in b.states %}<span class="chip state-{{ key }}">{{ label }} {{ count }}</span>{% endfor %}
+          </span>
+          {% if b.kp_total %}
+          <span class="progress" role="img" aria-label="已复习 {{ b.kp_reviewed }} / {{ b.kp_total }} 个知识点">
+            <span style="width: {{ (100 * b.kp_reviewed / b.kp_total) | round(1) }}%"></span>
+          </span>
+          <span class="book-meta">复习 {{ b.kp_reviewed }}/{{ b.kp_total }} 个知识点</span>
+          {% endif %}
+        </a>
+        {% if sort == "custom" %}
+        <div class="book-order">
+          {% for direction, label, disabled in [("up", "前移", loop.first), ("down", "后移", loop.last)] %}
+          <form method="post" action="/courses/{{ b.course.id }}/position">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}">
+            <button class="icon-button" name="direction" value="{{ direction }}" title="{{ label }}" aria-label="{{ label }}"{{ " disabled" if disabled }}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="{{ 'M15 6l-6 6 6 6' if direction == 'up' else 'M9 6l6 6-6 6' }}"/></svg>
+            </button>
+          </form>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    <div class="plank" aria-hidden="true"></div>
+  </section>
+  {% endif %}
+</main>
+{% endblock %}

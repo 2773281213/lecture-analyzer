@@ -1,0 +1,75 @@
+[project]
+name = "lecture-analyzer"
+version = "0.1.0"
+description = "课程录音分析与考点预测工具"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "anthropic",
+    "google-genai",
+    "openai",
+    "pydantic>=2.7",
+    "typer",
+    "python-dotenv",
+    "pymupdf",
+    "imageio-ffmpeg",
+    "rapidfuzz",
+    "pywin32; sys_platform == 'win32'",
+    "fastapi>=0.143.1",
+    "uvicorn>=0.54.0",
+    "jinja2>=3.1.6",
+    "markdown-it-py>=4.2.0",
+    "charset-normalizer>=3.5",
+    "httpx>=0.28.1",
+    "httpx2",  # openai、anthropic 的 SDK 用它发请求：流式读到一半断开时抛出它的传输错误，适配器要按连接中断重试
+    "pywebview>=6.2",
+    "keyring>=25.7",
+    "tomlkit>=0.15",
+]
+
+[project.optional-dependencies]
+# 本地语音识别（需要 NVIDIA 显卡）：torchaudio 最高只发布到 2.11，torch 需与之对应
+asr = [
+    "torch==2.11.*",
+    "torchaudio==2.11.*",
+    "funasr",
+    "modelscope",  # Qwen3-ASR 等模型默认从 ModelScope 下载
+]
+
+[project.scripts]
+lec = "lecture_analyzer.cli:app"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchaudio = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lecture_analyzer"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"config.example.toml" = "lecture_analyzer/config.example.toml"  # 安装版首次启动时用它新建书库
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Office 退出后释放 COM 代理时会抛出 RPC 异常（COM 内部已处理，不影响结果），
+# faulthandler 在 Windows 上会把它误报为 "Windows fatal exception"，因此关闭
+addopts = "-p no:faulthandler"
+markers = [
+    "office: 需要本机安装 Microsoft Office（Word / PowerPoint）",
+]

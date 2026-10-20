@@ -1,0 +1,3 @@
+{# 重要程度，需要 row.priority：3 重点、2 较重要、1 一般、0 老师说不考 #}
+{% if row.priority == 0 %}<span class="priority excluded" title="老师说不考">不考</span>
+{% else %}<span class="priority p{{ row.priority }}" title="{{ {3: '老师提示考试或明确划重点', 2: '强调、易错或多次讲到', 1: '一般'}[row.priority] }}" aria-label="重要程度 {{ row.priority }}">{{ "★" * row.priority }}{{ "☆" * (3 - row.priority) }}</span>{% endif %}

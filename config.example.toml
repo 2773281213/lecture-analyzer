@@ -1,0 +1,168 @@
+# 复制为 config.toml 后按需修改。密钥不要写在这里，放到 .env（参考 .env.example）。
+
+[paths]
+data_dir = "data"              # 运行时数据目录：数据库、中间文件、输出
+
+[asr]
+backend = "auto"               # auto：按课程的授课语言选本地模型（只有中文用 Paraformer，韩语、英语等用 Qwen3-ASR）；llm：交给能听音频的模型；也可写死 funasr / qwen3
+funasr_preset = "paraformer"   # paraformer（支持热词）或 sensevoice（速度快、能识别语种）
+qwen3_size = "1.7b"            # Qwen3-ASR 型号：1.7b（更准）或 0.6b（更快、省显存）
+model_hub = "modelscope"       # 本地模型从哪里下载：modelscope（国内更稳定）或 huggingface
+device = "auto"                # auto：有 NVIDIA 显卡就用，否则用 CPU（很慢）；也可写死 "cuda:0" 或 "cpu"
+model_dir = ""                 # 本地模型的下载位置（相对本文件所在目录）；留空用 ModelScope 默认的缓存目录
+llm_profile = "gemini"         # backend = "llm" 时使用的模型档案（需要 audio = true）
+chunk_minutes = 10             # 交给模型转写时，每段音频的时长（分钟）
+# 被上游拦截（返回空结果）的片段会对半切开重试，切到最短（2.5 分钟）仍被拦截时依次换用这些型号（同一档案、同一接口）；
+# 拦截往往与型号有关，换个型号常能转写。例如 ["gemini-3-flash"]；留空表示不换型号，直接交给本地模型补转
+llm_alternates = []
+fallback = "auto"              # 换型号、对半切之后仍被拦截的片段用本地模型补转：auto（只有中文时 Paraformer，其他语言 Qwen3）/ none / 具体方案
+
+# 每一步用哪个模型档案；命令行可用 --model 临时指定
+[steps]
+page_digest = "gemini"         # 课件/资料页面识别，需要能看图的模型
+match = "gemini"               # 把课件页匹配到各讲（不写时与 page_digest 相同）
+extract = "claude"             # 单讲整理笔记
+integrate = "claude"           # 跨讲整合（课程记忆）
+review = "claude"              # 总复习讲义
+material = "claude"            # 资料拆题
+report = "claude"              # 考前报告
+qa_retrieve = "gemini"         # 问答：先找出和问题相关的知识点（不写时与 match 相同）
+qa = "claude"                  # 问答：依据笔记、转写和资料回答
+
+# 各步骤的推理强度：low / medium / high / xhigh / max（只对 supports_effort = true 的档案生效）
+[effort]
+page_digest = "low"
+match = "low"
+extract = "medium"
+integrate = "medium"
+review = "medium"
+material = "medium"
+report = "high"
+qa_retrieve = "low"
+qa = "medium"
+
+# 课程记忆与总复习的输入预算（token）；实际预算还受所选模型的上下文上限约束，超出时按优先级精简
+[memory]
+integrate_budget = 60000       # 跨讲整合的输入上限，128K 上下文的模型也放得下
+recent_lectures = 2            # 整合时带入最近几讲的笔记摘要
+review_budget = 60000          # 总复习每章的输入上限
+
+# 课程资料（课件、教材、试题……）的逐页识别
+[materials]
+digest_workers = 4             # 同时发出的识别请求数；中转站限流时调小
+digest_batch = 6               # 每次请求识别几页
+
+# 考前报告
+[report]
+top_n = 15                     # 每个模型排出前几个考点
+
+# 考点打分的权重（报告里会显示每个考点的分数构成）。只写要改的项，没写的用默认值，例如：
+# [scoring]
+# review_lecture = 3           # 在复习课里出现的加分
+# [scoring.signals]            # 课堂信号：权重 × 强度。默认：提示考试 exam_hint 5、考试范围 scope_include 4、
+# exam_hint = 6                #   强调 emphasis 3、易错 common_mistake 2、例题/推导/作业 2、回顾 1、课件外补充 1、跳过的课件页 -1
+# [scoring.materials]          # 资料题目：权重 × 分值系数。默认：往年真题 past_exam 5、模拟题 mock_exam 4、
+# past_exam = 6                #   复习提纲 review_outline 4、考试通知 notice 3、习题 exercise 2、其他 other 1
+
+# ---------------------------------------------------------------------------
+# 模型档案：每个 [models.<名称>] 是一个可调用的模型
+#   adapter      接入方式：anthropic / gemini / openai_compat（GPT 和国产模型都用 openai_compat）
+#   model        型号；留空表示尚未配置，可用 `lec models --remote <名称>` 查询服务端可用型号
+#   model_env    从 .env 的这个变量读取型号，填了就优先于 model（中转站共用一个地址时，靠型号区分模型）
+#   base_url     接口地址；不填则直连官方
+#   base_url_env 从 .env 的这个变量读取接口地址（例如中转站），填了就优先于 base_url
+#   structured   结构化输出方式：native（厂商原生）/ json_schema / json_object / prompt
+#   vision/audio 能否输入图片/音频
+#   max_context / max_output  上下文与输出上限（token）
+#   price_*      单价（美元 / 百万 token），用于费用统计，不清楚可以先填 0
+#   端点、型号和价格以各家官方文档为准
+# ---------------------------------------------------------------------------
+
+[models.claude]
+adapter = "anthropic"
+model = "claude-opus-5-5"
+model_env = "CLAUDE_MODEL"
+api_key_env = "ANTHROPIC_API_KEY"
+base_url_env = "ANTHROPIC_BASE_URL"
+vision = true
+structured = "native"
+supports_effort = true
+max_context = 1000000
+max_output = 64000
+tokens_per_char = 1.2           # 实测：中文、中韩混合约 1.17–1.21 token/字
+price_in = 4.0
+price_out = 20.0
+price_cache_read = 0.2
+
+[models.claude.options]
+refusal_fallback = true        # 请求被拒答时由服务端换模型重试（只在直连官方接口时生效，走中转站时自动关闭）
+
+# 如果中转站只提供 OpenAI 兼容格式（没有 Gemini 原生的 /v1beta 接口）：
+# 把下面的 adapter 改成 "openai_compat"、structured 改成 "json_object"，并让 GEMINI_BASE_URL 以 /v1 结尾；
+# 中转站前面有 Cloudflare 时，再加上 [models.gemini.options] stream = true（流式请求，长请求不会因 120 秒等待上限返回 524）
+[models.gemini]
+adapter = "gemini"
+model = ""                     # 用 `lec models --remote gemini` 查到型号后填写（或填在 .env 的 GEMINI_MODEL）
+model_env = "GEMINI_MODEL"
+api_key_env = "GEMINI_API_KEY"
+base_url_env = "GEMINI_BASE_URL"
+vision = true
+audio = true
+structured = "native"
+supports_effort = false        # 所选型号支持 thinking_level 时改为 true
+max_context = 1000000
+max_output = 32768
+tokens_per_char = 0.85          # 实测：约 0.82–0.85 token/字
+
+[models.gpt]
+adapter = "openai_compat"
+model = ""                     # 按 OpenAI 官方文档填写（或填在 .env 的 GPT_MODEL）
+model_env = "GPT_MODEL"
+api_key_env = "OPENAI_API_KEY"
+base_url_env = "OPENAI_BASE_URL"     # OpenAI 兼容接口的地址要以 /v1 结尾
+vision = true
+structured = "json_schema"
+supports_effort = true
+max_context = 128000
+max_output = 32000
+
+[models.gpt.options]
+max_tokens_param = "max_completion_tokens"   # OpenAI 新模型使用的参数名
+# stream = true                              # OpenAI 兼容接口都可以打开流式请求：走有超时限制的中转站时建议打开
+
+[models.deepseek]
+adapter = "openai_compat"
+model = ""
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+structured = "json_object"     # Chat Completions 接口只保证输出合法 JSON
+max_context = 128000
+max_output = 8000
+
+[models.qwen]
+adapter = "openai_compat"
+model = ""
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"   # 百炼北京地域；也可换成控制台给出的业务空间专属域名
+api_key_env = "DASHSCOPE_API_KEY"
+structured = "json_object"
+vision = false                 # 选用视觉模型（VL 系列）时改为 true
+max_context = 128000
+max_output = 8000
+
+[models.kimi]
+adapter = "openai_compat"
+model = ""
+base_url = "https://api.moonshot.cn/v1"   # 国际站为 https://api.moonshot.ai/v1
+api_key_env = "MOONSHOT_API_KEY"
+structured = "json_object"
+max_context = 128000
+max_output = 8000
+
+[models.glm]
+adapter = "openai_compat"
+model = ""
+base_url = "https://open.bigmodel.cn/api/paas/v4/"   # 官方要求保留末尾斜杠
+api_key_env = "ZHIPUAI_API_KEY"
+structured = "json_object"
+max_context = 128000
+max_output = 8000

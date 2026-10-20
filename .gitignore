@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# 密钥与本地配置
+.env
+config.toml
+.claude/
+
+# 运行时数据与实验输出（含转写、笔记等课程内容）
+data/
+experiments/output/
+
+# 课程素材：建议统一放在 materials/；仓库公开，录音录像和课件一律不提交
+materials/
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.aac
+*.ogg
+/*.pdf
+/*.ppt
+/*.pptx
+/*.doc
+/*.docx
+
+# 打包产物（packaging/build.ps1）
+build/
+dist/

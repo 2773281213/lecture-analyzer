@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% from "_forms.html" import csrf_field %}
+{% block title %}设置 · 课程书架{% endblock %}
+{% block nav %}<span class="topbar-note">设置</span>{% endblock %}
+{% block body %}
+<main class="course-page settings">
+  <header class="book-head">
+    <p class="eyebrow">书库：{{ home }}</p>
+    <h1>设置</h1>
+    <p class="head-actions">
+      <a class="pill" href="#models">模型和密钥</a>
+      <a class="pill" href="#steps">各步骤用的模型</a>
+      <a class="pill" href="#asr">转写</a>
+      <a class="pill" href="#general">其他</a>
+      <a class="pill" href="#costs">费用</a>
+      <button type="button" class="pill native-only" data-open-path="{{ home }}">打开书库文件夹</button>
+    </p>
+  </header>
+
+  {% if welcome %}
+  <div class="notice">
+    <p><strong>第一次使用：</strong>在下面填写各模型的型号和密钥（走中转站时再填接口地址），然后点「测试连接」。默认用 Claude 整理笔记和回答问题，用 Gemini 转写录音、识别课件。</p>
+    <p class="small muted">密钥保存在 Windows 凭据管理器里，只有当前 Windows 账号能读取；本页不会显示已保存的密钥。</p>
+    <p><a class="button" href="/">设置好了，去书架</a></p>
+  </div>
+  {% endif %}
+
+  <section class="block" id="models">
+    <h2>模型和密钥</h2>
+    {% if env_keys %}
+    <form method="post" action="/settings/keys/move" class="notice form-actions" data-confirm="把 .env 里的这些密钥移到 Windows 凭据管理器，并清空 .env 里的值？">
+      {{ csrf_field() }}
+      <span>.env 文件里有明文保存的密钥：{{ env_keys | join("、") }}。</span>
+      <button class="button button-quiet">移到 Windows 凭据管理器</button>
+    </form>
+    {% endif %}
+    {% for p in profiles %}
+    <article class="card" id="model-{{ p.name }}">
+      <header class="card-head">
+        <h3>{{ p.name }} <span class="muted small">{{ p.adapter }}</span></h3>
+        <span class="card-meta">
+          {% if p.ready %}<span class="chip state-done">就绪</span>{% elif not p.model %}<span class="chip state-pending">没填型号</span>{% else %}<span class="chip state-failed">缺少密钥</span>{% endif %}
+          {% if p.vision %}<span class="sig">看图</span>{% endif %}{% if p.audio %}<span class="sig">听音频</span>{% endif %}
+        </span>
+      </header>
+      <form method="post" action="/settings/models/{{ p.name }}" class="field-row">
+        {{ csrf_field() }}
+        <label class="field"><span class="field-label">型号 <span class="muted small">（保存在 {{ p.model_place }}）</span></span>
+          <input name="model" value="{{ p.model }}" maxlength="200" placeholder="如 claude-opus-5-5"></label>
+        <label class="field"><span class="field-label">接口地址 <span class="muted small">（保存在 {{ p.url_place }}）</span></span>
+          <input name="base_url" value="{{ p.base_url }}" maxlength="300" placeholder="留空直连官方接口；走中转站时填中转地址"></label>
+        <p class="form-actions"><button class="button">保存</button></p>
+      </form>
+      {% if p.key_env %}
+      <div class="field-row">
+        <form method="post" action="/settings/models/{{ p.name }}/key" class="inline-form">
+          {{ csrf_field() }}
+          <span class="small">密钥 {{ p.key_env }}：{% if p.key_set %}已设置（{{ p.key_source }}）{% else %}未设置{% endif %}</span>
+          <input name="key" type="password" autocomplete="off" required maxlength="400" placeholder="{{ '换一个新密钥' if p.key_set else '粘贴密钥' }}" aria-label="{{ p.name }} 的密钥">
+          <button class="button">保存到凭据管理器</button>
+        </form>
+        {% if p.key_in_credential %}
+        <form method="post" action="/settings/models/{{ p.name }}/key/delete" class="inline-form" data-confirm="从 Windows 凭据管理器删除 {{ p.key_env }}？">
+          {{ csrf_field() }}<button class="button button-quiet">删除密钥</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+      <form method="post" action="/settings/models/{{ p.name }}/test" class="form-actions">
+        {{ csrf_field() }}<button class="button button-quiet" data-busy="测试中…">测试连接</button>
+        <span class="muted small">发一个很短的请求，看型号、地址和密钥是否可用</span>
+      </form>
+    </article>
+    {% endfor %}
+  </section>
+
+  <section class="block" id="steps">
+    <h2>各步骤用的模型</h2>
+    <form method="post" action="/settings/steps" class="form-card">
+      {{ csrf_field() }}
+      <div class="table-wrap">
+        <table class="steps">
+          {% for step, label, current, usable in steps %}
+          <tr>
+            <td>{{ label }}</td>
+            <td><select name="{{ step }}" aria-label="{{ label }}">
+              {% for name in usable %}<option value="{{ name }}"{{ " selected" if name == current }}>{{ name }}</option>{% endfor %}
+            </select></td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      <p class="form-actions"><button class="button">保存</button><span class="muted small">只列出具备这一步所需能力的档案</span></p>
+    </form>
+  </section>
+
+  <section class="block" id="asr">
+    <h2>转写</h2>
+    <form method="post" action="/settings/asr" class="form-card">
+      {{ csrf_field() }}
+      <label class="field"><span class="field-label">默认的转写方案（每门课也可以单独选）</span>
+        <select name="backend">{% for key, label in ASR_BACKENDS.items() %}<option value="{{ key }}"{{ " selected" if key == asr.backend }}>{{ label }}</option>{% endfor %}</select></label>
+      <div class="field-row">
+        <label class="field"><span class="field-label">大模型转写用的档案</span>
+          <select name="llm_profile">{% for name in audio_profiles %}<option{{ " selected" if name == asr.llm_profile }}>{{ name }}</option>{% endfor %}</select></label>
+        <label class="field"><span class="field-label">FunASR 预设</span>
+          <select name="funasr_preset">{% for key in funasr_presets %}<option{{ " selected" if key == asr.funasr_preset }}>{{ key }}</option>{% endfor %}</select></label>
+        <label class="field"><span class="field-label">Qwen3-ASR 型号</span>
+          <select name="qwen3_size">{% for key in qwen3_sizes %}<option{{ " selected" if key == asr.qwen3_size }}>{{ key }}</option>{% endfor %}</select></label>
+      </div>
+      <div class="field-row">
+        <label class="field"><span class="field-label">本地模型用的设备</span>
+          <select name="device">{% for key, label in [("auto", "自动（有 NVIDIA 显卡就用）"), ("cuda:0", "显卡 cuda:0"), ("cpu", "CPU（很慢）")] %}<option value="{{ key }}"{{ " selected" if key == asr.device }}>{{ label }}</option>{% endfor %}</select></label>
+        <label class="field"><span class="field-label">本地模型的位置（相对书库文件夹，留空用 ModelScope 默认缓存）</span>
+          <input name="model_dir" value="{{ asr.model_dir }}" maxlength="400" placeholder="如 models 或 C:\Users\你\.cache\modelscope"></label>
+      </div>
+      <p class="form-actions"><button class="button">保存</button></p>
+    </form>
+    <h3 class="chapter-name">本地模型</h3>
+    <p class="muted small">位置：{{ model_root }}。第一次用本地方案转写时会自动下载（显示进度），也可以在这里提前下载。</p>
+    <ul class="plain-list">
+      {% for spec, label in LOCAL_ASR.items() %}
+      {% set status = local_models[spec] %}
+      <li>
+        <span>{{ label }}</span>
+        {% if status.missing %}
+        <span class="chip state-pending">还有 {{ status.missing }}/{{ status.total }} 个模型没下载</span>
+        <form method="post" action="/settings/models-download" class="inline-form">
+          {{ csrf_field() }}<input type="hidden" name="spec" value="{{ spec }}"><button class="button button-quiet">下载</button>
+        </form>
+        {% else %}<span class="chip state-done">已下载</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section class="block" id="general">
+    <h2>其他</h2>
+    <form method="post" action="/settings/general" class="form-card field-row">
+      {{ csrf_field() }}
+      <label class="field"><span class="field-label">资料逐页识别时同时发出的请求数</span>
+        <input name="digest_workers" inputmode="numeric" pattern="[0-9]*" value="{{ digest_workers }}" required></label>
+      <p class="form-actions"><button class="button">保存</button></p>
+    </form>
+    <p class="muted small">书库数据在 {{ data_dir }}。</p>
+  </section>
+
+  <section class="block" id="costs">
+    <h2>费用</h2>
+    {% if costs %}
+    <div class="table-wrap">
+      <table class="signals">
+        <thead><tr><th>步骤</th><th>型号</th><th>调用</th><th>输入 token</th><th>输出 token</th><th>费用（美元）</th></tr></thead>
+        <tbody>
+        {% for row in costs %}
+        <tr><td>{{ row.step }}</td><td>{{ row.model }}</td><td>{{ row.calls }}</td><td>{{ row.input_tokens }}</td><td>{{ row.output_tokens }}</td><td>{{ "%.2f" | format(row.cost_usd) if row.cost_usd is not none else "未填单价" }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="meta">合计约 {{ "%.2f" | format(total_cost) }} 美元（按 config.toml 里各档案填写的单价估算）</p>
+    {% else %}
+    <p class="muted">还没有调用过模型。</p>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}

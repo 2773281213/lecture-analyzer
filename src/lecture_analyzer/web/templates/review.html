@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ course.name }} 总复习 · 课程书架{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="/static/reader.js?v={{ static_version }}"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMath()"></script>
+{% endblock %}
+{% block nav %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 总复习</span>{% endblock %}
+{% block body %}
+<div class="reader" style="--spine: {{ spine }}">
+  <aside class="toc">
+    <p class="toc-label">章节</p>
+    <ol>
+      {% for chapter in chapters %}
+      <li><a href="#ch-{{ loop.index }}">{{ chapter.chapter }}</a>
+        <ol>{% for entry in chapter.entries %}<li><a href="#k-{{ entry.key }}">{{ entry.name }}</a></li>{% endfor %}</ol>
+      </li>
+      {% endfor %}
+    </ol>
+  </aside>
+
+  <main class="page" lang="{{ course.settings.html_lang }}">
+    <header class="book-head">
+      <p class="eyebrow"><a href="/courses/{{ course.id }}">{{ course.name }}</a> · 总复习</p>
+      <h1>{{ course.name }} · 总复习</h1>
+      <p class="meta">
+        已复习 {{ kp_reviewed }}/{{ kp_total }} 个知识点（重点 {{ key_reviewed }}/{{ key_total }}）
+        · 重要程度由老师的考点信号计算：★★★ 提示考试或明确划重点，★★ 强调、易错或多次讲到
+      </p>
+      <p class="head-actions">
+        <a class="pill{{ ' is-active' if not focus }}" href="/courses/{{ course.id }}/review">全部</a>
+        <a class="pill{{ ' is-active' if focus }}" href="/courses/{{ course.id }}/review?focus=1">只看重点</a>
+      </p>
+      {% if not generated %}
+      <form method="post" action="/courses/{{ course.id }}/review/generate" class="notice form-actions">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <span>还没有生成复习讲义，下面先按章节列出各讲笔记原文和老师原话。</span>
+        <button class="button">生成总复习</button>
+      </form>
+      {% elif stale %}
+      <form method="post" action="/courses/{{ course.id }}/review/generate" class="notice form-actions">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <span>这些章节的内容有更新，讲义待重新生成：{{ stale | join("、") }}。</span>
+        <button class="button">只重写这些章节</button>
+      </form>
+      {% endif %}
+    </header>
+
+    {% for chapter in chapters %}
+    <section id="ch-{{ loop.index }}" class="block">
+      <h2>{{ chapter.chapter }}{% if chapter.state == "stale" %} <span class="chip state-stale">待更新</span>{% endif %}</h2>
+      {% if chapter.overview_md %}<div class="prose overview">{{ chapter.overview_md | md }}</div>{% endif %}
+      {% for entry in chapter.entries %}
+      {% set row = entry %}
+      <article id="k-{{ entry.key }}" class="card review-entry{{ ' is-reviewed' if entry.reviewed }}">
+        <header class="card-head">
+          <div class="entry-title">
+            {% with back = "review", toggle_name = entry.norm_name, toggle_key = entry.key, toggle_reviewed = entry.reviewed %}
+            {% include "_review_toggle.html" %}
+            {% endwith %}
+            <h3>{{ entry.name }}</h3>
+            {% include "_priority.html" %}
+          </div>
+          <span class="card-meta">
+            {% for s in entry.sources %}<a class="appear" href="/lectures/{{ s.lecture_id }}{% if s.t is not none %}?t={{ s.t }}{% endif %}">第{{ s.seq }}讲{% if s.role %}·{{ s.role }}{% endif %}</a>{% endfor %}
+          </span>
+        </header>
+        {% set shown_aliases = entry.aliases | zh_aliases %}
+        {% if shown_aliases %}<p class="muted small">又称：{{ shown_aliases | join("、") }}</p>{% endif %}
+        <div class="prose">{{ entry.summary_md | md }}</div>
+        {% if entry.quotes %}
+        <ul class="quotes">
+          {% for q in entry.quotes %}
+          <li>
+            <span class="sig sig-{{ q.type }}">{{ q.label }}</span>
+            {{ quote_html(q.quote, q.meaning) }}
+            <a class="appear" href="/lectures/{{ q.lecture_id }}{% if q.t is not none %}?t={{ q.t }}{% endif %}">第{{ q.seq }}讲{% if q.t is not none %} {{ q.t | ts }}{% endif %}</a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        {% for ex in entry.examples %}
+        <details class="solution">
+          <summary>例题：{{ ex.title }}（第{{ ex.seq }}讲）</summary>
+          <div class="prose">{{ ex.problem_md | md }}</div>
+          <div class="prose"><strong>解答</strong>{{ ex.solution_md | md }}</div>
+        </details>
+        {% endfor %}
+        {% for m in entry.materials %}
+        <details class="solution">
+          <summary>资料：「{{ m.title }}」{{ m.label }}（{{ m.type }}）</summary>
+          <div class="prose">{{ m.content_md | md }}</div>
+          <p class="small"><a href="/materials/{{ m.material_id }}">查看这份资料</a></p>
+        </details>
+        {% endfor %}
+      </article>
+      {% endfor %}
+    </section>
+    {% else %}
+    <p class="notice">{{ "没有标为重点的知识点" if focus else "课程记忆还没有建立：处理完至少一讲后会自动整合。" }}</p>
+    {% endfor %}
+  </main>
+</div>
+{% endblock %}

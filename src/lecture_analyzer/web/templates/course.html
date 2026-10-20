@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% from "_forms.html" import csrf_field, paths_field, force_select, jobs_panel, state_chip %}
+{% block title %}{{ course.name }} · 课程书架{% endblock %}
+{% block nav %}<span class="topbar-note">{{ course.name }}</span>{% endblock %}
+{% block body %}
+<main class="course-page" style="--spine: {{ spine }}">
+  <header class="book-head">
+    <p class="eyebrow">{{ course.settings.subject }} · {{ course.settings.teaching_description }} · 笔记：{{ course.settings.note_language_name }}</p>
+    <h1>{{ course.name }}</h1>
+    <p class="meta">
+      {{ lectures | length }} 讲{% if total_ms %} · 共 {{ total_ms | ts }}{% endif %}
+      · 知识点 {{ kp_total }} 个 · 已复习 {{ kp_reviewed }}/{{ kp_total }}（重点 {{ key_reviewed }}/{{ key_total }}）
+    </p>
+    <p class="head-actions">
+      <a class="button" href="/courses/{{ course.id }}/review">总复习</a>
+      <a class="button" href="/courses/{{ course.id }}/qa">提问</a>
+      <a class="pill" href="#add-lecture">添加一讲</a>
+      <a class="pill" href="#analysis">考前分析</a>
+      <a class="pill" href="#materials">课程资料</a>
+      <a class="pill" href="/courses/{{ course.id }}/settings">课程设置</a>
+      <a class="pill" href="/api/courses/{{ course.id }}">book.json</a>
+    </p>
+    {% if all_lectures %}
+    <div class="head-actions">
+      <form method="post" action="/courses/{{ course.id }}/run" class="inline-form" title="接着处理：只处理没完成的讲；从某一步起重做：这门课的全部讲都重做">
+        {{ csrf_field() }}
+        {{ force_select() }}
+        <button class="button button-quiet">处理全部讲</button>
+      </form>
+      <form method="post" action="/courses/{{ course.id }}/rebuild" class="inline-form">
+        {{ csrf_field() }}
+        <button class="button button-quiet" title="前面的讲有更新时，按讲次重新整合后面的讲">重建课程记忆</button>
+      </form>
+    </div>
+    {% endif %}
+    {% if course.instructions %}
+    <details class="instructions"><summary>课程提示词</summary><pre>{{ course.instructions }}</pre></details>
+    {% endif %}
+  </header>
+
+  {{ jobs_panel(active_jobs) }}
+
+  {% if course.slides == "unset" %}
+  <div class="notice">
+    <p>开始分析前，请先选择这门课是否提供课件。有课件就导入（在下面的「课程资料」里选类型「课件」，导入后会自动匹配到各讲）；没有课件就声明不提供。</p>
+    <form method="post" action="/courses/{{ course.id }}/slides" class="form-actions">
+      {{ csrf_field() }}
+      <a class="button" href="#import-material">导入课件</a>
+      <button class="button button-quiet">这门课没有课件</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <section class="block" id="chapters">
+    <h2>目录</h2>
+    {% if all_tags %}
+    <nav class="tag-filter" aria-label="按标签筛选">
+      <a class="pill{{ ' is-active' if not active_tag }}" href="/courses/{{ course.id }}">全部</a>
+      {% for t in all_tags %}<a class="pill{{ ' is-active' if t == active_tag }}" href="/courses/{{ course.id }}?tag={{ t | urlencode }}">{{ t }}</a>{% endfor %}
+    </nav>
+    {% endif %}
+    <ol class="chapter-list">
+      {% for lecture, state, tags in lectures %}
+      <li>
+        <a class="chapter-link" href="/lectures/{{ lecture.id }}">
+          <span class="chapter-seq">第 {{ lecture.seq }} 讲</span>
+          <span class="chapter-title">{{ lecture.title or "（标题待生成）" }}</span>
+        </a>
+        <span class="chapter-meta">
+          {% if lecture.duration_ms %}{{ lecture.duration_ms | ts }}{% else %}时长未知{% endif %}
+          {% if lecture.parts | length > 1 %} · {{ lecture.parts | length }} 节{% endif %}
+          · {{ KIND_LABELS.get(lecture.kind, lecture.kind) }}{% if lecture.date %} · {{ lecture.date }}{% endif %}
+          {% for t in tags %}<span class="tag">{{ t }}</span>{% endfor %}
+          <span class="chip state-{{ state[0] }}">{{ state[1] }}</span>
+        </span>
+      </li>
+      {% else %}
+      <li class="muted">{{ "没有带这个标签的讲" if active_tag else "这门课还没有讲：在下面添加第一讲" }}</li>
+      {% endfor %}
+    </ol>
+
+    <details class="form-card" id="add-lecture"{{ " open" if not all_lectures }}>
+      <summary class="form-summary">添加一讲</summary>
+      <form method="post" action="/courses/{{ course.id }}/lectures">
+        {{ csrf_field() }}
+        <div class="field-row">
+          <label class="field"><span class="field-label">第几讲</span>
+            <input name="seq" inputmode="numeric" pattern="[0-9]*" value="{{ next_seq }}" required></label>
+          <label class="field"><span class="field-label">类型</span>
+            <select name="kind">{% for key, label in KIND_LABELS.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
+          <label class="field"><span class="field-label">上课日期（可选）</span><input name="date" type="date"></label>
+        </div>
+        <label class="field"><span class="field-label">标题（可选，不填由笔记生成）</span><input name="title" maxlength="200"></label>
+        {{ paths_field("paths", "录音或录像（一讲分成几个文件时，按顺序每行一个，作为第 1、2… 节）", pick="files", types="media",
+                       key="lecture-paths") }}
+        {{ paths_field("slides", "这一讲固定对应的课件（可选，一个文件）", pick="file", types="documents", required=false, rows=1,
+                       hint="课件导入后，这一讲只用这份课件，不再自动匹配", key="lecture-slides") }}
+        <label class="check-label"><input type="checkbox" name="run" value="1" checked> 添加后立即处理</label>
+        <p class="form-actions"><button class="button">添加</button><span class="muted small">原始音视频不会复制，只记录位置；处理在后台进行</span></p>
+      </form>
+    </details>
+  </section>
+
+  <section class="block" id="materials">
+    <h2>课程资料</h2>
+    <p class="meta">课件：{{ SLIDES_LABELS[course.slides] }}</p>
+    {% if materials %}
+    <div class="table-wrap">
+      <table class="signals">
+        <thead><tr><th>编号</th><th>类型</th><th>标题</th><th>页数</th><th>识别</th><th>题目</th></tr></thead>
+        <tbody>
+        {% for row in materials %}
+        <tr>
+          <td>{{ row.material.id }}</td>
+          <td>{{ row.material.kind_label }}</td>
+          <td><a href="/materials/{{ row.material.id }}">{{ row.material.title }}</a></td>
+          <td>{{ row.material.page_count }}</td>
+          <td>{% if row.material.step_state("digest") == "done" %}完成{% else %}{{ row.digested }}/{{ row.material.page_count }} 页{% endif %}</td>
+          <td>{% if row.material.step_state("items") == "done" %}{{ row.items }} 条{% if row.stale %}<span class="chip state-stale">对应待更新</span>{% endif %}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if pending_materials %}
+    <form method="post" action="/courses/{{ course.id }}/materials/process" class="form-actions">
+      {{ csrf_field() }}
+      <button class="button button-quiet">继续处理没处理完的资料</button>
+      <span class="muted small">逐页识别中断后，只识别还没识别的页</span>
+    </form>
+    {% endif %}
+    {% else %}
+    <p class="muted">还没有资料。课件、教材、往年真题、模拟题、复习提纲、考试通知都可以导入。</p>
+    {% endif %}
+
+    <details class="form-card" id="import-material"{{ " open" if course.slides == "unset" and not materials }}>
+      <summary class="form-summary">导入资料</summary>
+      <form method="post" action="/courses/{{ course.id }}/materials">
+        {{ csrf_field() }}
+        <label class="field"><span class="field-label">类型</span>
+          <select name="kind" required>{% for key, label in MATERIAL_KINDS.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
+        {{ paths_field("paths", "文件、文件夹或压缩包（zip / rar / 7z），每行一个", pick="any", types="documents",
+                       hint="每个文档成为一份资料，同一文件夹里的图片合成一份", key="material-paths") }}
+        <label class="field"><span class="field-label">标题（可选，只导入一份时有效）</span><input name="title" maxlength="200"></label>
+        <label class="check-label"><input type="checkbox" name="process" value="1" checked> 导入后立即逐页识别（调用模型）</label>
+        <p class="form-actions"><button class="button">导入</button><span class="muted small">原文件不受影响，书库里保存一份副本</span></p>
+      </form>
+    </details>
+  </section>
+
+  <section class="block" id="analysis">
+    <h2>考前分析</h2>
+    {% if not chapters %}
+    <p class="muted">课程记忆还没有建立：处理完至少一讲后才能分析。</p>
+    {% else %}
+    <form class="analysis" method="post" action="/courses/{{ course.id }}/report">
+      {{ csrf_field() }}
+      <fieldset>
+        <legend>讲（不选表示全部）</legend>
+        {% for lecture in all_lectures %}<label class="check-label"><input type="checkbox" name="lecture" value="{{ lecture.seq }}"> 第 {{ lecture.seq }} 讲</label>{% endfor %}
+        {% if all_tags %}<label class="check-label">按标签 <select name="tag"><option value="">不限</option>{% for t in all_tags %}<option>{{ t }}</option>{% endfor %}</select></label>{% endif %}
+      </fieldset>
+      {% if materials %}
+      <fieldset>
+        <legend>资料（不选表示全部）</legend>
+        {% for row in materials %}<label class="check-label"><input type="checkbox" name="material" value="{{ row.material.id }}"> {{ row.material.title }}<span class="muted">（{{ row.material.kind_label }}）</span></label>{% endfor %}
+      </fieldset>
+      {% endif %}
+      <fieldset>
+        <legend>模型（可多选，各自排名后取共识）</legend>
+        {% for name in models %}<label class="check-label"><input type="checkbox" name="model" value="{{ name }}"{{ " checked" if name == default_model }}> {{ name }}</label>{% else %}<span class="muted">没有填好型号和密钥的模型档案，先到<a href="/settings">设置</a>里填写</span>{% endfor %}
+      </fieldset>
+      <p class="form-actions"><button class="button" type="submit">生成考前报告</button><span class="muted small">每个模型排名一次，再更新相关章节的总复习取知识点要点；在后台运行，可以离开本页</span></p>
+    </form>
+    <form class="inline-form" method="post" action="/courses/{{ course.id }}/review/generate">
+      {{ csrf_field() }}
+      <button class="button" type="submit">生成 / 更新总复习</button>
+      <label class="check-label small"><input type="checkbox" name="all" value="1"> 所有章节都重新生成</label>
+    </form>
+    {% endif %}
+
+    {% if reports %}
+    <h3 class="chapter-name">考前报告</h3>
+    <ul class="plain-list">
+      {% for r in reports %}<li><a href="/reports/{{ r.id }}">{{ r.title }}</a> <span class="muted small">{{ r.models | join("、") }}</span></li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if jobs %}
+    <h3 class="chapter-name">最近的后台任务</h3>
+    <ul class="plain-list">
+      {% for job in jobs %}<li><a href="/jobs/{{ job.id }}">{{ job.label }}</a> {{ state_chip(job.state) }} <span class="muted small">{{ job.created_at | replace("T", " ") }}</span></li>{% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+
+  <section class="block" id="knowledge">
+    <h2>知识点体系</h2>
+    {% if not chapters %}
+    <p class="muted">课程记忆还没有建立：处理完至少一讲后会自动整合。</p>
+    {% endif %}
+    {% for chapter, rows in chapters %}
+    <h3 class="chapter-name">{{ chapter }}</h3>
+    <ul class="kp-list">
+      {% for row in rows %}
+      <li id="k-{{ row.kp.key }}" class="kp-row{{ ' is-reviewed' if row.reviewed }}">
+        {% with back = "course", toggle_name = row.norm_name, toggle_key = row.kp.key, toggle_reviewed = row.reviewed %}
+        {% include "_review_toggle.html" %}
+        {% endwith %}
+        <div class="kp-main">
+          <span class="kp-name">{{ row.kp.name }}</span>
+          {% include "_priority.html" %}
+          {% set shown_aliases = row.kp.aliases | zh_aliases %}
+          {% if shown_aliases %}<span class="muted">（{{ shown_aliases | join("、") }}）</span>{% endif %}
+          <div class="kp-meta">
+            {% for a in row.appearances %}
+            <a class="appear" href="/lectures/{{ a.lecture_id }}{% if a.t is not none %}?t={{ a.t }}{% endif %}">第{{ a.seq }}讲·{{ a.role }}</a>
+            {% endfor %}
+            {% for label, count in row.signals %}<span class="sig">{{ label }} {{ count }}</span>{% endfor %}
+          </div>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endfor %}
+  </section>
+</main>
+{% include "_slides_gate.html" %}
+{% endblock %}

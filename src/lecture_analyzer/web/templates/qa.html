@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% from "_forms.html" import csrf_field %}
+{% from "_evidence.html" import evidence_item %}
+{% block title %}提问 · {{ course.name }} · 课程书架{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="/static/reader.js?v={{ static_version }}"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMath()"></script>
+{% endblock %}
+{% block nav %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 提问</span>{% endblock %}
+{% block body %}
+<div class="qa-layout" style="--spine: {{ spine }}">
+  <aside class="qa-threads">
+    <a class="button" href="/courses/{{ course.id }}/qa">新对话</a>
+    <ol>
+      {% for t in threads %}
+      <li class="{{ 'is-active' if t.thread == thread }}">
+        <a href="/courses/{{ course.id }}/qa?thread={{ t.thread }}">{{ t.first_question | truncate(40, true) }}</a>
+        <span class="muted small">{{ t.turns }} 问 · {{ t.updated_at[:10] }}</span>
+      </li>
+      {% else %}
+      <li class="muted small">还没有对话</li>
+      {% endfor %}
+    </ol>
+  </aside>
+
+  <main class="qa-main">
+    <header class="book-head">
+      <p class="eyebrow">{{ course.name }} · 依据这门课的录音、笔记和资料回答，每处依据都附出处</p>
+      <h1>{{ (turns[0].question | truncate(60, true)) if turns else "提问" }}</h1>
+    </header>
+
+    {% if not has_memory %}
+    <p class="notice">这门课还没有课程记忆：先处理至少一讲，再来提问。</p>
+    {% endif %}
+
+    {% for turn in turns %}
+    {% set r = turn.result %}
+    <article class="card qa-turn" id="qa-{{ turn.id }}">
+      <p class="qa-question">
+        <span class="role">问</span>{{ turn.question }}
+        {% if r.scope %}<a class="chip" href="/lectures/{{ r.scope.lecture_id }}">限第 {{ r.scope.seq }} 讲</a>{% endif %}
+      </p>
+      {% if not r.found %}<p><span class="chip state-stale">课程内容里没有找到答案</span></p>{% endif %}
+      <div class="prose">{{ r.answer_md | md | cite(r.evidence) }}</div>
+      {% if r.supplement_md %}
+      <div class="supplement">
+        <p class="field-label">课程内容之外的补充（不是老师讲的）</p>
+        <div class="prose">{{ r.supplement_md | md }}</div>
+      </div>
+      {% endif %}
+      {% if r.evidence %}
+      <details class="qa-sources"{{ " open" if loop.last }}>
+        <summary>出处（{{ r.evidence | length }}）</summary>
+        <ul class="evidence-list">{% for eid, view in r.evidence.items() %}{{ evidence_item(view) }}{% endfor %}</ul>
+      </details>
+      {% endif %}
+      <p class="muted small">
+        {{ r.models.answer }}
+        {% if r.kps %} · 相关知识点：{% for kp in r.kps %}<a href="/courses/{{ course.id }}#k-{{ kp.key }}">K{{ kp.key }} {{ kp.name }}</a>{{ "、" if not loop.last }}{% endfor %}{% endif %}
+        · {{ turn.created_at | replace("T", " ") }}
+      </p>
+    </article>
+    {% endfor %}
+
+    {% for job in pending %}
+    <article class="card qa-turn is-pending" data-job-id="{{ job.id }}" data-reload>
+      <p class="qa-question"><span class="role">问</span>{{ job.params.question }}</p>
+      <p class="muted small"><span class="chip state-running" data-job-state>{{ JOB_STATES.get(job.state, job.state) }}</span> <span data-job-progress>{{ job.progress }}</span></p>
+    </article>
+    {% endfor %}
+
+    {% for job in failed %}
+    <article class="card qa-turn is-failed">
+      <p class="qa-question"><span class="role">问</span>{{ job.params.question }}</p>
+      <p class="muted small"><span class="chip state-failed">没有答成（{{ JOB_STATES.get(job.state, job.state) }}）</span> {{ job.error | truncate(300, true) }}</p>
+      <form method="post" action="/courses/{{ course.id }}/qa" class="form-actions">
+        {{ csrf_field() }}
+        <input type="hidden" name="thread" value="{{ thread }}">
+        <input type="hidden" name="question" value="{{ job.params.question }}">
+        <input type="hidden" name="lecture" value="{{ job.params.lecture_id or '' }}">
+        <button class="button button-quiet">重新提问</button>
+        <a class="muted small" href="/jobs/{{ job.id }}">任务详情</a>
+      </form>
+    </article>
+    {% endfor %}
+
+    {% if has_memory %}
+    <form method="post" action="/courses/{{ course.id }}/qa" class="form-card qa-ask">
+      {{ csrf_field() }}
+      {% if thread %}<input type="hidden" name="thread" value="{{ thread }}">{% endif %}
+      <label class="field"><span class="field-label">{{ "接着问" if turns or pending or failed else "你的问题" }}</span>
+        <textarea name="question" rows="3" maxlength="{{ max_chars }}" required
+                  placeholder="用什么语言提问都可以，例如：朊病毒和普通病毒有什么不同？"></textarea></label>
+      <div class="form-actions">
+        <label class="check-label">范围
+          <select name="lecture">
+            <option value="">整门课</option>
+            {% for l in lectures %}<option value="{{ l.id }}"{{ " selected" if l.id == scope }}{{ " disabled" if l.id not in ready }}>第 {{ l.seq }} 讲{% if l.title %}「{{ l.title | truncate(20, true) }}」{% endif %}{% if l.id not in ready %}（还没处理）{% endif %}</option>{% endfor %}
+          </select>
+        </label>
+        <button class="button">提问</button>
+        <span class="muted small">在后台回答，一般要半分钟左右，可以离开本页</span>
+      </div>
+    </form>
+    {% endif %}
+
+    {% if thread and turns %}
+    <form method="post" action="/courses/{{ course.id }}/qa/{{ thread }}/delete" class="form-actions" data-confirm="删除这段对话？">
+      {{ csrf_field() }}<button class="button button-quiet">删除这段对话</button>
+    </form>
+    {% endif %}
+  </main>
+</div>
+{% endblock %}

@@ -1,0 +1,26 @@
+{# 课件关卡：开始处理前先选择这门课是否提供课件。gate 是原本要处理的讲（lecture 编号）和步骤（force）。 #}
+{% from "_forms.html" import csrf_field, paths_field %}
+{% macro run_fields() -%}
+<input type="hidden" name="then_run" value="1">
+{% for id in gate.lectures %}<input type="hidden" name="lecture" value="{{ id }}">{% endfor %}
+<input type="hidden" name="force" value="{{ gate.force }}">
+{%- endmacro %}
+{% if gate %}
+<dialog class="modal" id="slides-gate" data-open aria-labelledby="gate-title">
+  <h2 id="gate-title">「{{ course.name }}」提供课件吗？</h2>
+  <p>开始处理前，请先选择这门课是否提供课件。有课件时，整理笔记会参考课件，并在笔记里标出对应的页；导入后会自动匹配到各讲，以后再导入也可以。</p>
+  <form method="post" action="/courses/{{ course.id }}/materials">
+    {{ csrf_field() }}{{ run_fields() }}
+    <input type="hidden" name="kind" value="slides">
+    <input type="hidden" name="process" value="1">
+    {{ paths_field("paths", "课件：文件、文件夹或压缩包（zip / rar / 7z）", pick="any", types="documents", key="gate-paths") }}
+    <p class="form-actions"><button class="button">导入课件，然后开始处理</button></p>
+  </form>
+  <hr>
+  <form method="post" action="/courses/{{ course.id }}/slides" class="form-actions">
+    {{ csrf_field() }}{{ run_fields() }}
+    <button class="button button-quiet">这门课没有课件，直接开始处理</button>
+  </form>
+  <form method="dialog" class="form-actions"><button class="link-button">以后再说</button></form>
+</dialog>
+{% endif %}
