@@ -97,22 +97,24 @@ price_cache_read = 0.2
 [models.claude.options]
 refusal_fallback = true        # 请求被拒答时由服务端换模型重试（只在直连官方接口时生效，走中转站时自动关闭）
 
-# 如果中转站只提供 OpenAI 兼容格式（没有 Gemini 原生的 /v1beta 接口）：
-# 把下面的 adapter 改成 "openai_compat"、structured 改成 "json_object"，并让 GEMINI_BASE_URL 以 /v1 结尾；
-# 中转站前面有 Cloudflare 时，再加上 [models.gemini.options] stream = true（流式请求，长请求不会因 120 秒等待上限返回 524）
+# 默认按 OpenAI 兼容格式接入（多数中转站只提供 /v1，没有 Gemini 原生的 /v1beta 接口），GEMINI_BASE_URL 要以 /v1 结尾。
+# 直连 Google 官方或中转站提供 /v1beta 时：把 adapter 改成 "gemini"、structured 改成 "native"，并去掉下面的 options。
 [models.gemini]
-adapter = "gemini"
+adapter = "openai_compat"
 model = ""                     # 用 `lec models --remote gemini` 查到型号后填写（或填在 .env 的 GEMINI_MODEL）
 model_env = "GEMINI_MODEL"
 api_key_env = "GEMINI_API_KEY"
 base_url_env = "GEMINI_BASE_URL"
 vision = true
 audio = true
-structured = "native"
+structured = "json_object"
 supports_effort = false        # 所选型号支持 thinking_level 时改为 true
 max_context = 1000000
 max_output = 32768
 tokens_per_char = 0.85          # 实测：约 0.82–0.85 token/字
+
+[models.gemini.options]
+stream = true                  # 流式请求：中转站前面有 Cloudflare 时，长请求不会因 120 秒等待上限返回 524
 
 [models.gpt]
 adapter = "openai_compat"

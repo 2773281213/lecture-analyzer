@@ -112,7 +112,7 @@ uv run lec cost                               # 按步骤和模型汇总 token �
 
 ```
 ANTHROPIC_BASE_URL=https://你的中转站/
-GEMINI_BASE_URL=https://你的中转站/
+GEMINI_BASE_URL=https://你的中转站/v1     # gemini 档案默认走 OpenAI 兼容格式，也要以 /v1 结尾
 OPENAI_BASE_URL=https://你的中转站/v1     # OpenAI 兼容接口要以 /v1 结尾
 CLAUDE_MODEL=claude-opus-5-5
 GEMINI_MODEL=…
