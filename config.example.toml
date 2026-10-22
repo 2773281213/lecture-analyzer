@@ -130,7 +130,7 @@ max_output = 32000
 
 [models.gpt.options]
 max_tokens_param = "max_completion_tokens"   # OpenAI 新模型使用的参数名
-# stream = true                              # OpenAI 兼容接口都可以打开流式请求：走有超时限制的中转站时建议打开
+stream = true                                # 流式请求：中转站前面有 Cloudflare 时，长输出（如整理长讲的笔记）不会因 120 秒等待上限返回 524
 
 [models.deepseek]
 adapter = "openai_compat"
