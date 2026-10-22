@@ -23,7 +23,7 @@
       <a class="pill" href="/reports/{{ report.id }}/markdown">下载 Markdown</a>
       <a class="pill" href="/courses/{{ course.id }}#analysis">返回课程</a>
     </p>
-    <p class="muted small">按可能考到的程度排列。{{ legend }}</p>
+    <p class="muted small">按可能考到的程度排列，只展开 ★★★ 必考考点，其余折叠在后面。{{ legend }}</p>
   </header>
 
   {% for warning in result.warnings %}<p class="notice">注意：{{ warning }}</p>{% endfor %}
@@ -32,24 +32,23 @@
   <p class="notice">这是旧版报告，只保留了考点名称；重新生成可得到知识点要点。</p>
   <ol>{% for row in result.priorities %}<li>{{ row.name }}</li>{% endfor %}</ol>
   {% else %}
-  {% for point in result.points %}
-  <article class="card report-point" id="p-{{ point.key }}">
-    <header class="card-head">
-      <div class="entry-title">
-        <h3>{{ point.rank }}. {{ point.name }}</h3>
-        {% with row = point %}{% include "_priority.html" %}{% endwith %}
-      </div>
-      {% if point.types %}<span class="card-meta">可能题型：{{ point.types | join("、") }}</span>{% endif %}
-    </header>
-    <div class="prose">{{ point.summary_md | md }}</div>
-    <p class="small no-print"><a class="appear" href="/courses/{{ course.id }}#k-{{ point.key }}">在课程里查看出处</a></p>
-  </article>
+  {% set must = result.points | selectattr("priority", "equalto", 3) | list %}
+  {% set rest = result.points | rejectattr("priority", "equalto", 3) | list %}
+  <h2 class="report-section">必考（★★★，{{ must | length }} 个）</h2>
+  {% for point in must %}{% include "_report_point.html" %}{% else %}
+  <p class="muted">这次分析没有找到 ★★★ 必考考点（老师没有提示考试、划重点，资料里也没有对应的真题、提纲）。其余考点见下面。</p>
   {% endfor %}
-  {% if result.excluded %}
-  <section class="block" id="excluded">
-    <h2>不考的知识点</h2>
-    <ul>{% for item in result.excluded %}<li>{{ item.name }}</li>{% endfor %}</ul>
-  </section>
+  {% if rest or result.excluded %}
+  <details class="rest-points">
+    <summary>其余 {{ rest | length }} 个考点（★★ 及以下）{% if result.excluded %}和 {{ result.excluded | length }} 个不考的知识点{% endif %}，点开查看</summary>
+    {% for point in rest %}{% include "_report_point.html" %}{% endfor %}
+    {% if result.excluded %}
+    <section class="block" id="excluded">
+      <h2>不考的知识点</h2>
+      <ul>{% for item in result.excluded %}<li>{{ item.name }}</li>{% endfor %}</ul>
+    </section>
+    {% endif %}
+  </details>
   {% endif %}
   {% endif %}
 

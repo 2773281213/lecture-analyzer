@@ -207,7 +207,33 @@
     setTimeout(poll, 5000);
   }
 
+  // ---------- 折叠的非必考内容（总复习、考前报告） ----------
+  // 跳到折叠区里的知识点（目录、#k-编号 链接）时先展开；打印时全部展开，打印完恢复。
+  function revealHash() {
+    if (!location.hash) return;
+    let target = null;
+    try { target = document.querySelector(decodeURIComponent(location.hash)); } catch (e) { return; }
+    const folded = target && target.closest("details.rest-points:not([open])");
+    if (!folded) return;
+    folded.open = true;
+    target.scrollIntoView();
+  }
+  window.addEventListener("hashchange", revealHash);
+  document.addEventListener("click", function (event) {  // 再次点同一个目录项时没有 hashchange
+    if (event.target.closest('a[href^="#"]')) setTimeout(revealHash, 0);
+  });
+  let openedForPrint = [];
+  window.addEventListener("beforeprint", function () {
+    openedForPrint = Array.from(document.querySelectorAll("details.rest-points:not([open])"));
+    openedForPrint.forEach(function (d) { d.open = true; });
+  });
+  window.addEventListener("afterprint", function () {
+    openedForPrint.forEach(function (d) { d.open = false; });
+    openedForPrint = [];
+  });
+
   document.addEventListener("DOMContentLoaded", function () {
+    revealHash();
     document.querySelectorAll("[data-job-id]").forEach(watchItem);
     const box = document.getElementById("job");
     if (box) watchJobPage(box);

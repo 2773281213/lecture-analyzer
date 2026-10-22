@@ -14,7 +14,7 @@
     <ol>
       {% for chapter in chapters %}
       <li><a href="#ch-{{ loop.index }}">{{ chapter.chapter }}</a>
-        <ol>{% for entry in chapter.entries %}<li><a href="#k-{{ entry.key }}">{{ entry.name }}</a></li>{% endfor %}</ol>
+        <ol>{% for entry in chapter.entries %}<li{% if entry.priority != 3 %} class="toc-rest"{% endif %}><a href="#k-{{ entry.key }}">{{ entry.name }}</a></li>{% endfor %}</ol>
       </li>
       {% endfor %}
     </ol>
@@ -27,6 +27,7 @@
       <p class="meta">
         已复习 {{ kp_reviewed }}/{{ kp_total }} 个知识点（重点 {{ key_reviewed }}/{{ key_total }}）
         · 重要程度由老师的考点信号计算：★★★ 提示考试或明确划重点，★★ 强调、易错或多次讲到
+        · 每章只展开 ★★★ 必考知识点，其余折叠在章末
       </p>
       <p class="head-actions">
         <a class="pill{{ ' is-active' if not focus }}" href="/courses/{{ course.id }}/review">全部</a>
@@ -51,51 +52,15 @@
     <section id="ch-{{ loop.index }}" class="block">
       <h2>{{ chapter.chapter }}{% if chapter.state == "stale" %} <span class="chip state-stale">待更新</span>{% endif %}</h2>
       {% if chapter.overview_md %}<div class="prose overview">{{ chapter.overview_md | md }}</div>{% endif %}
-      {% for entry in chapter.entries %}
-      {% set row = entry %}
-      <article id="k-{{ entry.key }}" class="card review-entry{{ ' is-reviewed' if entry.reviewed }}">
-        <header class="card-head">
-          <div class="entry-title">
-            {% with back = "review", toggle_name = entry.norm_name, toggle_key = entry.key, toggle_reviewed = entry.reviewed %}
-            {% include "_review_toggle.html" %}
-            {% endwith %}
-            <h3>{{ entry.name }}</h3>
-            {% include "_priority.html" %}
-          </div>
-          <span class="card-meta">
-            {% for s in entry.sources %}<a class="appear" href="/lectures/{{ s.lecture_id }}{% if s.t is not none %}?t={{ s.t }}{% endif %}">第{{ s.seq }}讲{% if s.role %}·{{ s.role }}{% endif %}</a>{% endfor %}
-          </span>
-        </header>
-        {% set shown_aliases = entry.aliases | zh_aliases %}
-        {% if shown_aliases %}<p class="muted small">又称：{{ shown_aliases | join("、") }}</p>{% endif %}
-        <div class="prose">{{ entry.summary_md | md }}</div>
-        {% if entry.quotes %}
-        <ul class="quotes">
-          {% for q in entry.quotes %}
-          <li>
-            <span class="sig sig-{{ q.type }}">{{ q.label }}</span>
-            {{ quote_html(q.quote, q.meaning) }}
-            <a class="appear" href="/lectures/{{ q.lecture_id }}{% if q.t is not none %}?t={{ q.t }}{% endif %}">第{{ q.seq }}讲{% if q.t is not none %} {{ q.t | ts }}{% endif %}</a>
-          </li>
-          {% endfor %}
-        </ul>
-        {% endif %}
-        {% for ex in entry.examples %}
-        <details class="solution">
-          <summary>例题：{{ ex.title }}（第{{ ex.seq }}讲）</summary>
-          <div class="prose">{{ ex.problem_md | md }}</div>
-          <div class="prose"><strong>解答</strong>{{ ex.solution_md | md }}</div>
-        </details>
-        {% endfor %}
-        {% for m in entry.materials %}
-        <details class="solution">
-          <summary>资料：「{{ m.title }}」{{ m.label }}（{{ m.type }}）</summary>
-          <div class="prose">{{ m.content_md | md }}</div>
-          <p class="small"><a href="/materials/{{ m.material_id }}">查看这份资料</a></p>
-        </details>
-        {% endfor %}
-      </article>
-      {% endfor %}
+      {% set must = chapter.entries | selectattr("priority", "equalto", 3) | list %}
+      {% set rest = chapter.entries | rejectattr("priority", "equalto", 3) | list %}
+      {% for entry in must %}{% include "_review_entry.html" %}{% endfor %}
+      {% if rest %}
+      <details class="rest-points">
+        <summary>{{ "本章没有必考知识点，" if not must }}其余 {{ rest | length }} 个知识点（★★ 及以下，点开查看）</summary>
+        {% for entry in rest %}{% include "_review_entry.html" %}{% endfor %}
+      </details>
+      {% endif %}
     </section>
     {% else %}
     <p class="notice">{{ "没有标为重点的知识点" if focus else "课程记忆还没有建立：处理完至少一讲后会自动整合。" }}</p>

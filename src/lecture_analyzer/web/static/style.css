@@ -432,3 +432,11 @@ a.cite:hover { color: var(--card); background: var(--accent); }
 .quote-original > summary { display: inline; cursor: pointer; list-style: none; text-decoration: underline dotted; }
 .quote-original > summary::-webkit-details-marker { display: none; }
 .quote-original[open] { display: block; margin: 2px 0 0; }
+
+/* ---------- 总复习、考前报告：只展开 ★★★ 必考内容，其余折叠 ---------- */
+.rest-points { margin: 14px 0 4px; }
+.rest-points > summary { cursor: pointer; color: var(--accent); font-weight: 600; padding: 8px 0; }
+.rest-points[open] > summary { margin-bottom: 8px; }
+.report-section { margin: 18px 0 10px; }
+.toc .toc-rest a { color: var(--muted); font-size: 13px; }
+@media print { .rest-points > summary { display: none; } }

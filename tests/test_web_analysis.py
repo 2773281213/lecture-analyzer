@@ -221,3 +221,30 @@ def test_job_pause_resume_retry_buttons(m1_env):
     _post(client, "/jobs/retry-all")
     assert "没有需要重试的任务" in client.get("/jobs").text
     assert _post(client, "/jobs/999/pause").status_code == 400
+
+
+def test_report_shows_must_points_and_folds_the_rest(m1_env):
+    """考前报告只展开 ★★★ 必考考点，其余考点和不考的知识点折叠在后面。"""
+    def point(rank, key, name, priority):
+        return {"rank": rank, "key": key, "name": name, "priority": priority, "types": ["简答题"],
+                "summary_md": f"{name}的要点"}
+
+    with Library(m1_env.cfg.data_dir / "lecture.db") as library:
+        course = library.course_by_id(m1_env.course_id)
+        result = {"version": 2, "course": "药理学", "generated_at": "2026-10-22T23:30:00", "models": [], "warnings": [],
+                  "scope": {"lectures": [], "materials": []},
+                  "points": [point(1, 1, "阿司匹林的剂量分段", 3), point(2, 2, "肝药酶诱导", 2), point(3, 3, "首过效应", 1)],
+                  "excluded": [{"name": "药物经济学"}]}
+        report_id = ReportStore(library).add(course, "考前报告 2026-10-22 23:30", {}, result, ["claude"])
+    page = _client(m1_env).get(f"/reports/{report_id}").text
+    folded = page.index('<details class="rest-points">')
+    assert "必考（★★★，1 个）" in page and page.index("1. 阿司匹林的剂量分段") < folded
+    assert folded < page.index("2. 肝药酶诱导") and folded < page.index("3. 首过效应") < page.index("药物经济学")
+    assert "其余 2 个考点（★★ 及以下）和 1 个不考的知识点" in page
+
+    with Library(m1_env.cfg.data_dir / "lecture.db") as library:  # 没有必考考点时给出说明
+        result["points"] = [point(1, 2, "肝药酶诱导", 2)]
+        result["excluded"] = []
+        report_id = ReportStore(library).add(library.course_by_id(m1_env.course_id), "考前报告 2", {}, result, ["claude"])
+    page = _client(m1_env).get(f"/reports/{report_id}").text
+    assert "没有找到 ★★★ 必考考点" in page and "其余 1 个考点" in page

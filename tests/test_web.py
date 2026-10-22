@@ -187,3 +187,26 @@ def test_empty_library_shows_help(example_config):
 
     page = TestClient(create_app(load_config(example_config)), base_url=BASE).get("/")
     assert page.status_code == 200 and "书架还是空的" in page.text
+
+
+def test_review_shows_must_points_and_folds_the_rest(m1_env, monkeypatch):
+    """总复习每章只展开 ★★★ 必考知识点，其余折叠在章末；目录里非必考的条目淡化显示。"""
+    from dataclasses import replace
+
+    from lecture_analyzer.web import views
+
+    real = views.review_book
+
+    def with_minor_point(library, course):
+        chapters = real(library, course)
+        first = chapters[0]
+        minor = replace(first.entries[0], key=99, name="肝药酶诱导", priority=1)
+        return [replace(first, entries=[*first.entries, minor]), *chapters[1:]]
+
+    monkeypatch.setattr(views, "review_book", with_minor_point)
+    page = _processed_client(m1_env).get(f"/courses/{m1_env.course_id}/review").text
+    folded = page.index('<details class="rest-points">')
+    assert page.index('id="k-1"') < folded < page.index('id="k-99"')
+    assert "其余 1 个知识点（★★ 及以下" in page and 'class="toc-rest"><a href="#k-99"' in page
+    focus = _processed_client(m1_env).get(f"/courses/{m1_env.course_id}/review?focus=1").text
+    assert "肝药酶诱导" not in focus and "rest-points" not in focus  # 「只看重点」照旧只显示 ★★★
