@@ -7,6 +7,23 @@
   <header class="book-head">
     <p class="eyebrow">处理讲、导入资料、重建课程记忆、下载模型排成一队依次执行；考前报告、总复习和问答另排一队</p>
     <h1>后台任务</h1>
+    <div class="head-actions">
+      {% if active_count %}
+      <form method="post" action="/jobs/pause-all" data-confirm="暂停全部 {{ active_count }} 个排队中和进行中的任务？已完成的步骤会保留，继续时接着做。">
+        {{ csrf_field() }}<button class="button button-quiet">全部暂停（{{ active_count }}）</button>
+      </form>
+      {% endif %}
+      {% if paused_count %}
+      <form method="post" action="/jobs/resume-all">
+        {{ csrf_field() }}<button class="button">全部继续（{{ paused_count }}）</button>
+      </form>
+      {% endif %}
+      {% if retry_count %}
+      <form method="post" action="/jobs/retry-all" data-confirm="重新提交 {{ retry_count }} 个失败或已取消的任务？同样的任务只提交一次，已完成的步骤不会重做。">
+        {{ csrf_field() }}<button class="button">全部重试（{{ retry_count }}）</button>
+      </form>
+      {% endif %}
+    </div>
   </header>
   {% if jobs %}
   <div class="table-wrap">
@@ -14,17 +31,32 @@
       <thead><tr><th>编号</th><th>任务</th><th>课程</th><th>状态</th><th>进度 / 结果</th><th>提交时间</th><th></th></tr></thead>
       <tbody>
       {% for job in jobs %}
-      <tr{% if not job.finished %} data-job-id="{{ job.id }}" data-reload{% endif %}>
+      <tr{% if job.state in ("queued", "running") %} data-job-id="{{ job.id }}" data-reload{% endif %}>
         <td>#{{ job.id }}</td>
         <td><a href="/jobs/{{ job.id }}">{{ job.label }}</a></td>
         <td>{% if job.course_id %}{{ course_names.get(job.course_id, "（已删除）") }}{% else %}—{% endif %}</td>
         <td data-job-state>{{ state_chip(job.state) }}</td>
         <td class="quote" data-job-progress>{% if job.state == "failed" %}<span class="job-error">{{ job.error | truncate(160, true) }}</span>{% elif job.state == "done" %}{{ job.result.summary or "完成" }}{% if job.result.url %} · <a href="{{ job.result.url }}">查看结果</a>{% endif %}{% else %}{{ job.progress }}{% endif %}</td>
         <td class="small">{{ job.created_at | replace("T", " ") }}</td>
-        <td>{% if not job.finished %}
+        <td><div class="field-actions">
+          {% if job.state in ("queued", "running") %}
+          <form method="post" action="/jobs/{{ job.id }}/pause">
+            {{ csrf_field() }}<input type="hidden" name="back" value="jobs"><button class="button button-quiet">暂停</button>
+          </form>
+          {% elif job.paused %}
+          <form method="post" action="/jobs/{{ job.id }}/resume">
+            {{ csrf_field() }}<input type="hidden" name="back" value="jobs"><button class="button">继续</button>
+          </form>
+          {% elif job.retryable %}
+          <form method="post" action="/jobs/{{ job.id }}/retry">
+            {{ csrf_field() }}<input type="hidden" name="back" value="jobs"><button class="button">重试</button>
+          </form>
+          {% endif %}
+          {% if not job.finished %}
           <form method="post" action="/jobs/{{ job.id }}/cancel" data-confirm="取消这个任务？已完成的步骤会保留，下次接着做。">
-            {{ csrf_field() }}<button class="button button-quiet">取消</button>
-          </form>{% endif %}</td>
+            {{ csrf_field() }}<input type="hidden" name="back" value="jobs"><button class="button button-quiet">取消</button>
+          </form>{% endif %}
+        </div></td>
       </tr>
       {% endfor %}
       </tbody>

@@ -5,6 +5,7 @@
 - 排队以任务表为准：提交时只唤醒队列，队列线程从表里取最早的排队任务；
 - 取消：排队中的直接标为已取消；进行中的先标为已取消，再结束整个子进程树（含 ffmpeg 等）。
   "开始执行"和"取消"在同一把锁里完成，不会出现标了取消、进程却没被结束的情况；
+- 暂停与取消一样结束子进程，只是标为已暂停；继续时改回排队中并唤醒队列，已完成的步骤不重做；
 - 子进程没写结果就退出（崩溃、被结束）时标为失败，失败原因附上日志的最后几行；
   日志在 data/work/jobs/，只保留失败的任务的；
 - 关闭书架时结束所有子进程，任务标为失败；重新提交会接着做（已完成的步骤、已识别的页不重做）；
@@ -159,6 +160,38 @@ class JobRunner:
             kill_tree(process)
         return True
 
+    def pause(self, job_id: int) -> bool:
+        """暂停排队中或进行中的任务（进行中的结束子进程）；其他状态返回 False。"""
+        with self._lock:
+            with Library(self.db_path) as library:
+                if not JobStore(library).pause(job_id):
+                    return False
+            process = self._processes.get(job_id)
+        if process is not None:
+            kill_tree(process)
+        return True
+
+    def resume(self, job_id: int) -> bool:
+        """已暂停的任务改回排队中并唤醒队列；不是暂停状态时返回 False。"""
+        with Library(self.db_path) as library:
+            if not JobStore(library).resume(job_id):
+                return False
+        self.submit(job_id)
+        return True
+
+    def pause_all(self) -> int:
+        """暂停所有排队中和进行中的任务，返回暂停了几个。先暂停排队中的，免得结束进行中的任务后队列接着取下一个。"""
+        with Library(self.db_path) as library:
+            jobs = JobStore(library).active_jobs()
+        jobs.sort(key=lambda job: job.state != "queued")
+        return sum(self.pause(job.id) for job in jobs)
+
+    def resume_all(self) -> int:
+        """继续所有已暂停的任务，返回继续了几个。"""
+        with Library(self.db_path) as library:
+            jobs = JobStore(library).paused_jobs()
+        return sum(self.resume(job.id) for job in jobs)
+
     def running(self) -> list[int]:
         with self._lock:
             return list(self._processes)
@@ -229,14 +262,14 @@ class JobRunner:
             return process
 
     def _wait(self, job_id: int, process: subprocess.Popen[bytes]) -> int:
-        """等子进程结束；任务在别的书架程序里被取消（只改了任务表）时结束它。"""
+        """等子进程结束；任务在别的书架程序里被取消或暂停（只改了任务表）时结束它。"""
         while True:
             try:
                 return process.wait(timeout=CANCEL_POLL_SECONDS)
             except subprocess.TimeoutExpired:
                 with Library(self.db_path) as library:
-                    cancelled = JobStore(library).get(job_id).state == "cancelled"
-                if cancelled:
+                    stopped = JobStore(library).get(job_id).state in ("cancelled", "paused")
+                if stopped:
                     kill_tree(process)
 
     def _settle(self, job_id: int, code: int, log: Path) -> None:

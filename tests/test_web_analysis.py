@@ -173,3 +173,51 @@ def test_jobs_api_and_cancel(m1_env):
     assert (status["state"], status["state_label"], status["active"]) == ("cancelled", "已取消", False)
     assert client.get("/api/jobs").json()["active"] == 0
     assert _post(client, "/jobs/999/cancel").status_code == 400
+
+
+def test_job_pause_resume_retry_buttons(m1_env):
+    """单个任务的暂停 / 继续 / 重试，以及任务页顶部的全部暂停 / 全部继续 / 全部重试。
+    执行器不启动（只改任务表、不执行），看得清每一步的状态变化。"""
+    from lecture_analyzer.job_runner import JobRunner
+
+    db = m1_env.cfg.data_dir / "lecture.db"
+    app = create_app(m1_env.cfg)
+    app.state.jobs = JobRunner(m1_env.cfg, db, command=lambda job_id: ["unused"])
+    client = TestClient(app, base_url=BASE, follow_redirects=False)
+    with Library(db) as library:
+        course = library.course_by_id(m1_env.course_id)
+        store = JobStore(library)
+        first = store.add(course, "rebuild", {})
+        second = store.add(course, "process_material", {"materials": [1]})
+        failed = store.add(course, "review", {"all": True})
+        store.fail(failed.id, "模型请求失败")
+
+    page = client.get("/jobs").text
+    assert "全部暂停（2）" in page and "全部重试（1）" in page and "全部继续" not in page
+    assert f'action="/jobs/{first.id}/pause"' in page and f'action="/jobs/{failed.id}/retry"' in page
+
+    paused = _post(client, f"/jobs/{first.id}/pause", back="jobs")
+    assert paused.status_code == 303 and paused.headers["location"] == "/jobs"
+    assert client.get(f"/api/jobs/{first.id}").json()["state_label"] == "已暂停"
+    job_page = client.get(f"/jobs/{first.id}").text
+    assert f'action="/jobs/{first.id}/resume"' in job_page and "取消任务" in job_page
+    assert _post(client, f"/jobs/{first.id}/resume").headers["location"] == f"/jobs/{first.id}"
+    assert client.get(f"/api/jobs/{first.id}").json()["state"] == "queued"
+
+    assert _post(client, "/jobs/pause-all").headers["location"] == "/jobs"
+    page = client.get("/jobs").text
+    assert "已暂停 2 个任务" in page and "全部继续（2）" in page and "全部暂停" not in page
+    _post(client, "/jobs/resume-all")
+    assert client.get("/api/jobs").json()["active"] == 2
+
+    retried = _post(client, f"/jobs/{failed.id}/retry")
+    with Library(db) as library:
+        new = JobStore(library).latest(1)[0]
+    assert retried.headers["location"] == f"/jobs/{new.id}"
+    assert (new.kind, new.params, new.state) == ("review", {"all": True}, "queued")
+    assert _post(client, f"/jobs/{failed.id}/retry").headers["location"] == f"/jobs/{new.id}"  # 同样的任务已在排队
+    with Library(db) as library:
+        assert JobStore(library).latest(1)[0].id == new.id  # 没有重复提交
+    _post(client, "/jobs/retry-all")
+    assert "没有需要重试的任务" in client.get("/jobs").text
+    assert _post(client, "/jobs/999/pause").status_code == 400

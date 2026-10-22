@@ -21,11 +21,27 @@
     <p id="job-result"{% if not (job.state == "done" and job.result.url) %} hidden{% endif %}>
       <a class="button" id="job-link" href="{{ job.result.url or '#' }}">查看结果</a>
     </p>
-    {% if not job.finished %}
-    <form method="post" action="/jobs/{{ job.id }}/cancel" id="job-cancel" data-confirm="取消这个任务？已完成的步骤会保留，下次接着做。">
-      {{ csrf_field() }}<button class="button button-quiet">取消任务</button>
-    </form>
-    {% endif %}
+    <div class="form-actions" id="job-actions">
+      {% if job.state in ("queued", "running") %}
+      <form method="post" action="/jobs/{{ job.id }}/pause">
+        {{ csrf_field() }}<button class="button button-quiet">暂停</button>
+      </form>
+      {% elif job.paused %}
+      <form method="post" action="/jobs/{{ job.id }}/resume">
+        {{ csrf_field() }}<button class="button">继续</button>
+      </form>
+      {% elif job.retryable %}
+      <form method="post" action="/jobs/{{ job.id }}/retry">
+        {{ csrf_field() }}<button class="button">重试</button>
+      </form>
+      {% endif %}
+      {% if not job.finished %}
+      <form method="post" action="/jobs/{{ job.id }}/cancel" id="job-cancel" data-confirm="取消这个任务？已完成的步骤会保留，下次接着做。">
+        {{ csrf_field() }}<button class="button button-quiet">取消任务</button>
+      </form>
+      {% endif %}
+    </div>
+    {% if job.paused %}<p class="muted small">任务已暂停：点「继续」接着做，已完成的步骤、已识别的页不会重做。</p>{% endif %}
     <p class="muted small">任务在后台运行，可以离开本页，在顶栏的「后台任务」里查看；关闭书架程序会中断任务，再次提交时已完成的步骤不会重做。</p>
   </section>
   <p>{% if course %}<a class="pill" href="/courses/{{ course.id }}">返回课程</a> {% endif %}<a class="pill" href="/jobs">全部任务</a></p>

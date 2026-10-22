@@ -65,6 +65,43 @@ def test_job_states_only_move_forward(tmp_path):
         ensure_idle(library, course, "删除课程")
 
 
+def test_pause_resume_and_retry_candidates(tmp_path):
+    with Library(tmp_path / "lecture.db") as library:
+        course = library.add_course("病毒学", CourseSettings())
+        store = JobStore(library)
+        queued = store.add(course, "run", {"lectures": [1]})
+        running = store.add(course, "process_material", {"materials": [1]})
+        assert store.start(running.id)
+        store.report(running.id, "识别第 3 页")
+        assert store.pause(queued.id) and store.pause(running.id) and not store.pause(running.id)
+        job = store.get(running.id)
+        assert (job.state, job.progress, job.paused, job.finished) == ("paused", "识别第 3 页", True, False)
+        store.report(running.id, "暂停后的进度")
+        assert not store.finish(running.id, {"url": "/x"})  # 暂停之后子进程写回的进度和结果都不生效
+        assert store.get(running.id).progress == "识别第 3 页"
+        assert store.next_queued("heavy") is None and store.active_jobs() == []
+        assert [j.id for j in store.paused_jobs()] == [queued.id, running.id]
+        with pytest.raises(LibraryError, match="还有没结束的后台任务"):
+            ensure_idle(library, course, "删除课程")
+        assert store.fail_interrupted() == 0 and store.get(queued.id).state == "paused"  # 重启后保持暂停
+        assert store.resume(running.id) and not store.resume(running.id)
+        assert store.next_queued("heavy").id == running.id  # 按原来的编号排队
+        assert store.cancel(queued.id)  # 暂停的任务也可以取消
+
+        # 全部重试：同样的任务只看最新的一个
+        old = store.add(course, "rebuild", {})
+        store.fail(old.id, "第一次失败")
+        newer = store.add(course, "rebuild", {})
+        store.fail(newer.id, "第二次失败")
+        solved = store.add(course, "review", {"all": False})
+        store.cancel(solved.id)
+        store.finish(store.add(course, "review", {"all": False}).id, {})  # 后来重新提交，已经完成
+        models = store.add(None, "download_models", {"spec": "funasr:paraformer"})
+        store.fail(models.id, "网络错误")
+        assert [j.id for j in store.retry_candidates()] == [queued.id, newer.id, models.id]
+        assert store.get(newer.id).retryable and not store.get(running.id).retryable
+
+
 # ---------- 子进程执行器 ----------
 
 
@@ -251,3 +288,44 @@ def test_one_runner_per_library(runner_env):
     third.start()  # 先打开的关掉之后，锁就释放了
     assert third.owner
     third.shutdown()
+
+
+def test_pause_running_job_kills_process_and_resume_runs_it_again(runner_env):
+    job_id = _submit(runner_env, "run", sleep=60)
+    wait_for(lambda: _job(runner_env, job_id).progress == "子进程已启动")
+    process = runner_env.runner._processes[job_id]
+    assert runner_env.runner.pause(job_id) and not runner_env.runner.pause(job_id)
+    assert process.poll() is not None
+    wait_for(lambda: not runner_env.runner.running())
+    assert _job(runner_env, job_id).state == "paused"  # 子进程被结束后不会被标为失败
+    assert not log_path(runner_env.cfg.data_dir, job_id).exists()
+    with Library(runner_env.db) as library:  # 继续前改成很快完成的参数（真实任务靠"已完成的步骤不重做"接着做）
+        library.conn.execute("UPDATE job SET params = '{}' WHERE id = ?", (job_id,))
+        library.conn.commit()
+    assert runner_env.runner.resume(job_id) and not runner_env.runner.resume(job_id)
+    assert wait_for(lambda: _finished(runner_env, job_id)).state == "done"
+
+
+def test_pause_all_and_resume_all(runner_env):
+    running = _submit(runner_env, "run", sleep=60)
+    queued = _submit(runner_env, "rebuild")
+    wait_for(lambda: _job(runner_env, running).progress == "子进程已启动")
+    assert runner_env.runner.pause_all() == 2
+    wait_for(lambda: not runner_env.runner.running())
+    time.sleep(1)  # 暂停后队列不会接着取下一个
+    assert {_job(runner_env, i).state for i in (running, queued)} == {"paused"}
+    assert runner_env.runner.pause_all() == 0
+    runner_env.runner.cancel(running)
+    assert runner_env.runner.resume_all() == 1
+    assert wait_for(lambda: _finished(runner_env, queued)).state == "done"
+    assert runner_env.runner.resume_all() == 0
+
+
+def test_job_paused_elsewhere_is_stopped(runner_env):
+    """在另一个书架程序里暂停（只改了任务表）：执行器发现后结束子进程。"""
+    job_id = _submit(runner_env, "run", sleep=60)
+    wait_for(lambda: _job(runner_env, job_id).progress == "子进程已启动")
+    with Library(runner_env.db) as library:
+        assert JobStore(library).pause(job_id)
+    wait_for(lambda: not runner_env.runner.running(), timeout=15)
+    assert _job(runner_env, job_id).state == "paused"

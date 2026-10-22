@@ -65,9 +65,15 @@
     {% endfor %}
 
     {% for job in pending %}
-    <article class="card qa-turn is-pending" data-job-id="{{ job.id }}" data-reload>
+    <article class="card qa-turn is-pending"{% if not job.paused %} data-job-id="{{ job.id }}" data-reload{% endif %}>
       <p class="qa-question"><span class="role">问</span>{{ job.params.question }}</p>
       <p class="muted small"><span class="chip state-running" data-job-state>{{ JOB_STATES.get(job.state, job.state) }}</span> <span data-job-progress>{{ job.progress }}</span></p>
+      {% if job.paused %}
+      <form method="post" action="/jobs/{{ job.id }}/resume" class="form-actions">
+        {{ csrf_field() }}<button class="button button-quiet">继续</button>
+        <a class="muted small" href="/jobs/{{ job.id }}">任务详情</a>
+      </form>
+      {% endif %}
     </article>
     {% endfor %}
 

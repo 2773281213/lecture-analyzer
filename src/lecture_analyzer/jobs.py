@@ -4,8 +4,11 @@
 - 每个任务在独立的子进程里执行（执行器见 job_runner.py，各类任务的处理见 job_handlers.py）；
 - 两条队列：重任务（转写占显卡、大量调用模型）一个个排队执行；轻任务（报告、总复习、问答）另开一条，
   不会被正在跑的转写挡住；
-- 状态只按"排队中 → 进行中 → 完成 / 失败 / 已取消"单向变化：取消之后子进程再写回的进度和结果都不生效；
-- 应用启动时，上次没执行完的任务（应用被关闭）标为失败。
+- 状态按"排队中 → 进行中 → 完成 / 失败 / 已取消"单向变化：取消之后子进程再写回的进度和结果都不生效；
+- 暂停：排队中或进行中 → 已暂停（进行中的子进程被结束，之后写回的进度和结果同样不生效）；
+  继续：已暂停 → 排队中，按原来的编号排队，已完成的步骤、已识别的页不重做；
+- 重试：失败或已取消的任务按同样的参数重新提交一个新任务（旧任务留在列表里，看得出失败原因）；
+- 应用启动时，上次没执行完的任务（应用被关闭）标为失败；已暂停的任务保持暂停。
 """
 
 from __future__ import annotations
@@ -36,7 +39,10 @@ JOB_KINDS: dict[str, JobKind] = {
 }
 LANES = ("heavy", "light")
 ACTIVE_STATES = ("queued", "running")
-STATE_LABELS = {"queued": "排队中", "running": "进行中", "done": "完成", "failed": "失败", "cancelled": "已取消"}
+FINISHED_STATES = ("done", "failed", "cancelled")
+RETRYABLE_STATES = ("failed", "cancelled")
+STATE_LABELS = {"queued": "排队中", "running": "进行中", "paused": "已暂停", "done": "完成", "failed": "失败",
+                "cancelled": "已取消"}
 INTERRUPTED = "书架程序在任务完成前被关闭，请重新提交（已完成的步骤不会重做）"
 MAX_PROGRESS_CHARS = 500
 
@@ -61,7 +67,16 @@ class Job:
 
     @property
     def finished(self) -> bool:
-        return self.state not in ACTIVE_STATES
+        """完成、失败或已取消（已暂停的任务还没结束，可以继续）。"""
+        return self.state in FINISHED_STATES
+
+    @property
+    def paused(self) -> bool:
+        return self.state == "paused"
+
+    @property
+    def retryable(self) -> bool:
+        return self.state in RETRYABLE_STATES
 
 
 def _now() -> str:
@@ -114,9 +129,19 @@ class JobStore:
                             " WHERE id = ? AND state IN ('queued', 'running')", (error, _now(), job_id))
 
     def cancel(self, job_id: int) -> bool:
-        """排队中或进行中 → 已取消（进度说明保留，看得出停在哪里）；已经结束的任务返回 False。"""
+        """排队中、进行中或已暂停 → 已取消（进度说明保留，看得出停在哪里）；已经结束的任务返回 False。"""
         return self._change("UPDATE job SET state = 'cancelled', updated_at = ?"
+                            " WHERE id = ? AND state IN ('queued', 'running', 'paused')", (_now(), job_id))
+
+    def pause(self, job_id: int) -> bool:
+        """排队中或进行中 → 已暂停（进度说明保留）；其他状态返回 False。"""
+        return self._change("UPDATE job SET state = 'paused', updated_at = ?"
                             " WHERE id = ? AND state IN ('queued', 'running')", (_now(), job_id))
+
+    def resume(self, job_id: int) -> bool:
+        """已暂停 → 排队中；不是暂停状态时返回 False。"""
+        return self._change("UPDATE job SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'paused'",
+                            (_now(), job_id))
 
     def fail_interrupted(self) -> int:
         """把上次没执行完的任务标为失败（应用重启后它们不会再继续）。"""
@@ -157,6 +182,18 @@ class JobStore:
         ).fetchone()
         return _job(row) if row else None
 
+    def paused_jobs(self) -> list[Job]:
+        rows = self.conn.execute("SELECT * FROM job WHERE state = 'paused' ORDER BY id")
+        return [_job(row) for row in rows]
+
+    def retry_candidates(self) -> list[Job]:
+        """「全部重试」要重新提交的任务：同一门课、同一类型、同样参数的任务只看最新的一个，它失败或被取消时才算
+        （后来已经重新提交并完成、或者还在排队/进行中/暂停的，不再重复提交）。按提交顺序。"""
+        rows = self.conn.execute(
+            "SELECT * FROM job WHERE id IN (SELECT MAX(id) FROM job GROUP BY course_id, kind, params)"
+            " AND state IN ('failed', 'cancelled') ORDER BY id")
+        return [_job(row) for row in rows]
+
     def active_jobs(self, course: Course | None = None) -> list[Job]:
         """还没结束的任务（不给课程时为全部）。"""
         if course is None:
@@ -174,10 +211,11 @@ class JobStore:
 
 
 def ensure_idle(library: Library, course: Course, action: str) -> None:
-    """删除、移动之前：这门课不能有还没结束的任务（任务进程正在读写这些数据）。"""
-    jobs = JobStore(library).active_jobs(course)
+    """删除、移动之前：这门课不能有还没结束的任务（任务进程正在读写这些数据；暂停的任务继续后也会读写）。"""
+    store = JobStore(library)
+    jobs = store.active_jobs(course) + [job for job in store.paused_jobs() if job.course_id == course.id]
     if jobs:
-        names = "、".join(f"#{job.id} {job.label}" for job in jobs[:3])
+        names = "、".join(f"#{job.id} {job.label}" for job in sorted(jobs, key=lambda job: job.id)[:3])
         raise LibraryError(f"「{course.name}」还有没结束的后台任务（{names}），请等它们完成或取消后再{action}"
                            "（书架程序意外关闭留下的任务，重新打开一次书架就会清掉）")
 

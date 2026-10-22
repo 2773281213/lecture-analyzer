@@ -6,8 +6,8 @@
 //   任务页完成后跳到结果。
 (function () {
   "use strict";
-  const FINISHED = ["done", "failed", "cancelled"];
-  const STATE_CLASS = { done: "done", failed: "failed", cancelled: "skipped" };
+  const FINISHED = ["done", "failed", "cancelled", "paused"]; // 已暂停的任务不再变化，停止轮询
+  const STATE_CLASS = { done: "done", failed: "failed", cancelled: "skipped", paused: "skipped" };
 
   // ---------- 桌面程序的原生对话框 ----------
   function nativeApi() {
@@ -169,9 +169,13 @@
           setTimeout(poll, 2000);
           return;
         }
-        const cancel = document.getElementById("job-cancel");
-        if (cancel) cancel.remove();
-        if (data.state === "done" && data.url && data.url.startsWith("/")) {
+        if (data.state !== "done") {
+          if (!pageIsDirty()) location.reload(); // 换成「重试」或「继续」按钮
+          return;
+        }
+        const actions = document.getElementById("job-actions");
+        if (actions) actions.remove();
+        if (data.url && data.url.startsWith("/")) {
           document.getElementById("job-link").href = data.url;
           document.getElementById("job-result").hidden = false;
           if (!(data.warnings && data.warnings.length)) setTimeout(function () { location.href = data.url; }, 1200);

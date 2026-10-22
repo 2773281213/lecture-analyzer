@@ -48,5 +48,5 @@
 
 {# 任务状态的样式名 #}
 {% macro state_chip(state) -%}
-<span class="chip state-{{ {'done': 'done', 'failed': 'failed', 'cancelled': 'skipped'}.get(state, 'running') }}">{{ JOB_STATES.get(state, state) }}</span>
+<span class="chip state-{{ {'done': 'done', 'failed': 'failed', 'cancelled': 'skipped', 'paused': 'skipped'}.get(state, 'running') }}">{{ JOB_STATES.get(state, state) }}</span>
 {%- endmacro %}

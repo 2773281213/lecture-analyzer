@@ -312,10 +312,13 @@ def job_view(library: Library, job: Job) -> dict[str, Any]:
 
 
 def jobs_view(library: Library) -> dict[str, Any]:
-    """任务页：最近的任务，最新的在前。"""
-    jobs = JobStore(library).latest(50)
+    """任务页：最近的任务，最新的在前；顶部的「全部暂停 / 全部继续 / 全部重试」按全部任务统计（不限于这 50 个）。"""
+    store = JobStore(library)
+    jobs = store.latest(50)
     return {"jobs": jobs, "course_names": {course.id: course.name for course in library.courses()},
-            "has_active": any(not job.finished for job in jobs)}
+            "has_active": any(not job.finished for job in jobs),
+            "active_count": len(store.active_jobs()), "paused_count": len(store.paused_jobs()),
+            "retry_count": len(store.retry_candidates())}
 
 
 def _continuous_total(lecture: Lecture, offsets: Sequence[int]) -> int | None:
