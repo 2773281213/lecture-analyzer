@@ -13,7 +13,7 @@ name: release
 on:
   push:
     branches: [master]
-    paths: [pyproject.toml, .github/workflows/release.yml]
+    paths: [pyproject.toml, .github/workflows/release.yml, "packaging/**"]
     tags: ["v*"]
   workflow_dispatch:
     inputs:

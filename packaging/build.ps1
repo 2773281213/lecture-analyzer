@@ -91,9 +91,9 @@ Copy-Item $icon (Join-Path $app "app.ico")
 
 Step "6/7 命令行入口、第三方许可证清单、检查运行时"
 Copy-Item (Join-Path $PSScriptRoot "lec.cmd") $app
-& $python -I (Join-Path $PSScriptRoot "notices.py") (Join-Path $app "THIRD-PARTY-NOTICES.txt")
+& $python -I -X utf8 (Join-Path $PSScriptRoot "notices.py") (Join-Path $app "THIRD-PARTY-NOTICES.txt")
 Check "生成第三方许可证清单"
-& $python -I -c "import lecture_analyzer.desktop, lecture_analyzer.asr.funasr_backend, funasr, modelscope, torch, webview, keyring; print('运行时检查通过：torch', torch.__version__)"
+& $python -I -X utf8 -c "import lecture_analyzer.desktop, lecture_analyzer.asr.funasr_backend, funasr, modelscope, torch, webview, keyring; print('运行时检查通过：torch', torch.__version__)"
 Check "检查运行时"
 $files = Get-ChildItem -Recurse -File $app
 $size = ($files | Measure-Object Length -Sum).Sum / 1GB
