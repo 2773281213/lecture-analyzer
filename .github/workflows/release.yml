@@ -1,45 +1,80 @@
-# 打包安装包并发布到 GitHub Release：推送 v* 标签时自动运行，也可以在 Actions 页面手动运行（填标签）。
+# 打包安装包并发布到 GitHub Release。
+#
+# 触发方式（任选其一）：
+# - 推送到 master 且改了 pyproject.toml 的版本号：标签 v<版本> 还没有 Release 时自动打包发布，
+#   标签由发布这一步创建（指向这次推送的提交）；已经有 Release 时跳过
+# - 推送 v* 标签
+# - 在 Actions 页面手动运行，填要发布的标签（标签不存在时按 pyproject.toml 的版本在当前提交上创建）
+#
 # 在 Windows 上运行 packaging/build.ps1（自带 Python、PyTorch CUDA 和本地语音识别），
-# 安装包上传到同名 Release，说明取自 docs/releases/<标签>.md。
+# 安装包上传到 Release，说明取自 docs/releases/<标签>.md。
 name: release
 
 on:
   push:
+    branches: [master]
+    paths: [pyproject.toml, .github/workflows/release.yml]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "要发布的标签（例如 v0.1.1，必须已经存在）"
+        description: "要发布的标签（例如 v0.1.1），必须与 pyproject.toml 的版本一致"
         required: true
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"
+          elif [ -n "${INPUT_TAG}" ]; then tag="${INPUT_TAG}"
+          else tag="v${version}"; fi
+          if [ "${tag}" != "v${version}" ]; then
+            echo "::error::标签 ${tag} 与 pyproject.toml 的版本 ${version} 不一致"; exit 1
+          fi
+          if gh release view "${tag}" -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1 && [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_TYPE}" = "branch" ]; then
+            echo "Release ${tag} 已经存在，跳过打包"; build=false
+          else
+            build=true
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "build=${build}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: windows-latest
     timeout-minutes: 240
     env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
-      UV_CACHE_DIR: ${{ runner.temp }}\uv-cache  # 放在空间较大的工作盘
+      TAG: ${{ needs.plan.outputs.tag }}
       PYTHONIOENCODING: utf-8
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
 
-      - name: 检查标签与 pyproject.toml 的版本一致
+      - name: 准备环境变量
         run: |
-          $version = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          if ("v$version" -ne $env:TAG) { throw "标签 $env:TAG 与 pyproject.toml 的版本 $version 不一致" }
+          $version = "$env:TAG".Substring(1)
           "VERSION=$version" >> $env:GITHUB_ENV
+          "UV_CACHE_DIR=$env:RUNNER_TEMP\uv-cache" >> $env:GITHUB_ENV  # 放在空间较大的工作盘
 
       - uses: astral-sh/setup-uv@v6
 
@@ -53,9 +88,8 @@ jobs:
             choco install innosetup -y --no-progress
             $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1
           }
-          & $iscc.FullName "/?" | Select-Object -First 1
-          $languages = Join-Path $iscc.DirectoryName "Languages"
-          $isl = Join-Path $languages "ChineseSimplified.isl"
+          Write-Host "Inno Setup：$($iscc.FullName)"
+          $isl = Join-Path $iscc.DirectoryName "Languages\ChineseSimplified.isl"
           if (-not (Test-Path $isl)) {
             $sources = @(
               "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl",
@@ -98,9 +132,11 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:TAG "$env:SETUP" --clobber
           } else {
-            $ghArgs = @("release", "create", $env:TAG, "$env:SETUP", "--title", "lecture-analyzer $env:TAG", "--verify-tag")
+            # 标签不存在时由这一步在当前提交上创建
+            $ghArgs = @("release", "create", $env:TAG, "$env:SETUP", "--title", "lecture-analyzer $env:TAG", "--target", $env:GITHUB_SHA)
             if (Test-Path $notes) { $ghArgs += @("--notes-file", $notes) } else { $ghArgs += @("--generate-notes") }
             gh @ghArgs
           }
           if ($LASTEXITCODE -ne 0) { throw "发布失败" }
-          gh release view $env:TAG --json url,assets --jq '.url, (.assets[] | "\(.name) \(.size)")'
+          gh release view $env:TAG --json url --jq .url
+          gh release view $env:TAG --json assets --jq .assets[].name
