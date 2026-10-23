@@ -114,7 +114,18 @@ jobs:
           "SEVENZIP_MSI=$msi" >> $env:GITHUB_ENV
 
       - name: 打包（packaging/build.ps1）
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build.ps1 -InnoSetup "$env:ISCC" -SevenZipMsi "$env:SEVENZIP_MSI"
+        run: |
+          uv --version
+          $log = Join-Path $env:RUNNER_TEMP "build.log"
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build.ps1 -InnoSetup "$env:ISCC" -SevenZipMsi "$env:SEVENZIP_MSI" 2>&1 |
+            Tee-Object -FilePath $log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            # 失败时把输出的最后几十行写进错误注释，不用下载日志也能在 Checks / API 里看到原因
+            $tail = (Get-Content $log -Tail 40) -join "%0A"
+            Write-Host "::error title=build.ps1 失败（退出码 $code）::$tail"
+            exit $code
+          }
 
       - name: 检查安装包大小（GitHub Release 单个文件上限 2 GiB）
         run: |
