@@ -32,6 +32,12 @@ def render_markdown(text: str | None) -> Markup:
     return Markup(_PLACEHOLDER.sub(lambda m: str(escape(spans[int(m.group(1))])), html))
 
 
+def kp_url(course_id: int, key: int) -> str:
+    """知识点的具体内容：总复习里这个知识点的条目（要点、老师原话、例题、相关资料；没生成总复习时是各讲笔记原文）。
+    折叠区里的条目打开页面时自动展开（app.js 的 revealHash）。"""
+    return f"/courses/{course_id}/review#k-{key}"
+
+
 def evidence_url(view: dict[str, Any]) -> str:
     """出处的链接：原话、转写、笔记、例题跳到录音的时间点；课件页是页面图片；资料题目打开资料页。"""
     kind = view["id"][0]

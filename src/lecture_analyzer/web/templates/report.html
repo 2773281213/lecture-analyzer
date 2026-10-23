@@ -30,7 +30,7 @@
 
   {% if legacy %}
   <p class="notice">这是旧版报告，只保留了考点名称；重新生成可得到知识点要点。</p>
-  <ol>{% for row in result.priorities %}<li>{{ row.name }}</li>{% endfor %}</ol>
+  <ol>{% for row in result.priorities %}<li>{% if row.key %}<a class="kp-link" href="{{ kp_url(course.id, row.key) }}">{{ row.name }}</a>{% else %}{{ row.name }}{% endif %}</li>{% endfor %}</ol>
   {% else %}
   {% set must = result.points | selectattr("priority", "equalto", 3) | list %}
   {% set rest = result.points | rejectattr("priority", "equalto", 3) | list %}
@@ -45,7 +45,7 @@
     {% if result.excluded %}
     <section class="block" id="excluded">
       <h2>不考的知识点</h2>
-      <ul>{% for item in result.excluded %}<li>{{ item.name }}</li>{% endfor %}</ul>
+      <ul>{% for item in result.excluded %}<li>{% if item.key %}<a class="kp-link" href="{{ kp_url(course.id, item.key) }}">{{ item.name }}</a>{% else %}{{ item.name }}{% endif %}</li>{% endfor %}</ul>
     </section>
     {% endif %}
   </details>

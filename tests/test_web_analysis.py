@@ -73,7 +73,9 @@ def test_report_job_from_course_page(m1_env, monkeypatch):
 
     report = client.get(status["url"])
     assert report.status_code == 200
-    for text in ("1. 阿司匹林的剂量分段", "先背三段剂量", "可能题型：简答题", "在课程里查看出处", "打印 / 另存为 PDF"):
+    review_link = f'href="/courses/{m1_env.course_id}/review#k-1"'
+    for text in (f'1. <a class="kp-link" {review_link}>阿司匹林的剂量分段</a>', "先背三段剂量", "可能题型：简答题",
+                 "查看知识点详细内容", "打印 / 另存为 PDF"):  # 知识点名称链接到总复习里的具体内容
         assert text in report.text
     for text in ("这个期末一定会考", "共识分", "参考分"):  # 不显示推断过程
         assert text not in report.text
@@ -238,8 +240,10 @@ def test_report_shows_must_points_and_folds_the_rest(m1_env):
         report_id = ReportStore(library).add(course, "考前报告 2026-10-22 23:30", {}, result, ["claude"])
     page = _client(m1_env).get(f"/reports/{report_id}").text
     folded = page.index('<details class="rest-points">')
-    assert "必考（★★★，1 个）" in page and page.index("1. 阿司匹林的剂量分段") < folded
-    assert folded < page.index("2. 肝药酶诱导") and folded < page.index("3. 首过效应") < page.index("药物经济学")
+    assert "必考（★★★，1 个）" in page and page.index('id="p-1"') < folded
+    assert folded < page.index('id="p-2"') and folded < page.index('id="p-3"') < page.index("药物经济学")
+    assert f'href="/courses/{m1_env.course_id}/review#k-2">肝药酶诱导</a>' in page  # 折叠区里的名称同样是链接
+    assert "<li>药物经济学</li>" in page  # 没有编号的（旧数据）不加链接
     assert "其余 2 个考点（★★ 及以下）和 1 个不考的知识点" in page
 
     with Library(m1_env.cfg.data_dir / "lecture.db") as library:  # 没有必考考点时给出说明

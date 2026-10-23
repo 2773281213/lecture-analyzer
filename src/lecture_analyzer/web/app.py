@@ -48,7 +48,7 @@ from ..reports import ReportStore, StoredReport
 from ..timecode import format_ms
 from . import actions, manage_courses, manage_lectures, qa_page, settings_page
 from .forms import take_flash
-from .rendering import cite_links, evidence_url, render_markdown
+from .rendering import cite_links, evidence_url, kp_url, render_markdown
 from .views import (
     SORTS, course_view, job_view, jobs_view, lecture_state, lecture_view, material_view, report_view, review_view,
     shelf_books,
@@ -101,7 +101,7 @@ def _templates(csrf_token: str, db_path: Path) -> Jinja2Templates:
         SIGNAL_LABELS=SIGNAL_LABELS, KIND_LABELS=KIND_LABELS, STATE_LABELS=STATE_LABELS, SORTS=SORTS,
         SLIDES_LABELS=SLIDES_LABELS, MATERIAL_KINDS=MATERIAL_KINDS, JOB_STATES=JOB_STATES,
         RUN_STEPS=[(step, RUN_STEP_LABELS[step]) for step in STEPS], lecture_state=lecture_state,
-        evidence_url=evidence_url, take_flash=take_flash, active_job_count=active_job_count,
+        evidence_url=evidence_url, kp_url=kp_url, take_flash=take_flash, active_job_count=active_job_count,
         csrf_token=csrf_token, static_version=_static_version(),
         quote_html=lambda quote, meaning="": Markup(quote_html(quote, meaning)),  # 内容已转义
     )

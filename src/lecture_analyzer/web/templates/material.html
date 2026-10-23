@@ -41,7 +41,7 @@
       </header>
       <div class="prose">{{ item.content_md | md }}</div>
       {% if item.answer_md %}<details class="solution"><summary>资料上的答案</summary><div class="prose">{{ item.answer_md | md }}</div></details>{% endif %}
-      {% if kps %}<p class="kp-memory">{% for key, name in kps %}<a class="appear" href="/courses/{{ course.id }}#k-{{ key }}">K{{ key }} {{ name }}</a>{% endfor %}</p>{% endif %}
+      {% if kps %}<p class="kp-memory">{% for key, name in kps %}<a class="appear" href="{{ kp_url(course.id, key) }}">K{{ key }} {{ name }}</a>{% endfor %}</p>{% endif %}
     </article>
     {% endfor %}
   </section>

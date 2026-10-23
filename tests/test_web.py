@@ -235,3 +235,18 @@ def test_course_knowledge_shows_must_points_and_folds_the_rest(m1_env, monkeypat
     assert "本章其余 1 个知识点（★★ 及以下）" in page
     assert "本章没有必考知识点：1 个知识点（★★ 及以下）" in page
     assert page.rindex('<details class="rest-points">') < page.index('id="k-98"')
+
+
+def test_knowledge_point_names_link_to_their_content(m1_env):
+    """课程页、讲的页面上的知识点名称都链接到总复习里这个知识点的条目（要点、原话、例题、资料）。"""
+    client = _processed_client(m1_env)
+    target = f'href="/courses/{m1_env.course_id}/review#k-1"'
+    course = client.get(f"/courses/{m1_env.course_id}").text
+    assert f'<a class="kp-name" {target}>阿司匹林的剂量分段</a>' in course
+    lecture = client.get(f"/lectures/{m1_env.lecture_id}").text
+    assert f'<a class="kp-link" {target}>阿司匹林的剂量分段</a>' in lecture  # 讲内笔记的标题
+    assert f'<a {target}>K1 阿司匹林的剂量分段</a>' in lecture
+    assert f"/courses/{m1_env.course_id}#k-" not in course + lecture  # 不再指向只有名称的课程页条目
+    review = client.get(f"/courses/{m1_env.course_id}/review").text
+    assert 'id="k-1"' in review and "先背三段剂量" not in course  # 链接目标确实有内容
+

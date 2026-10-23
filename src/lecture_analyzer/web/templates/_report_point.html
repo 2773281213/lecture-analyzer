@@ -2,11 +2,11 @@
 <article class="card report-point" id="p-{{ point.key }}">
   <header class="card-head">
     <div class="entry-title">
-      <h3>{{ point.rank }}. {{ point.name }}</h3>
+      <h3>{{ point.rank }}. <a class="kp-link" href="{{ kp_url(course.id, point.key) }}">{{ point.name }}</a></h3>
       {% with row = point %}{% include "_priority.html" %}{% endwith %}
     </div>
     {% if point.types %}<span class="card-meta">可能题型：{{ point.types | join("、") }}</span>{% endif %}
   </header>
   <div class="prose">{{ point.summary_md | md }}</div>
-  <p class="small no-print"><a class="appear" href="/courses/{{ course.id }}#k-{{ point.key }}">在课程里查看出处</a></p>
+  <p class="small no-print"><a class="appear" href="{{ kp_url(course.id, point.key) }}">查看知识点详细内容</a></p>
 </article>

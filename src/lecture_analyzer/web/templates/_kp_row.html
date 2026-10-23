@@ -4,7 +4,7 @@
   {% include "_review_toggle.html" %}
   {% endwith %}
   <div class="kp-main">
-    <span class="kp-name">{{ row.kp.name }}</span>
+    <a class="kp-name" href="{{ kp_url(course.id, row.kp.key) }}">{{ row.kp.name }}</a>
     {% include "_priority.html" %}
     {% set shown_aliases = row.kp.aliases | zh_aliases %}
     {% if shown_aliases %}<span class="muted">（{{ shown_aliases | join("、") }}）</span>{% endif %}

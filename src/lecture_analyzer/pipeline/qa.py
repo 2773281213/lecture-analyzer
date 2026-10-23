@@ -203,7 +203,7 @@ class _LectureEvidence:
         segments = self.cache.segments(lecture_id)
         self._add("N", key, (lecture_id, note_index), lambda: {
             "label": f"第{seq}讲笔记", "name": note.name, "summary_md": note.summary_md, "seq": seq,
-            "lecture_id": lecture_id, "t": self.cache.time(lecture_id, note.segment_ids)})
+            "lecture_id": lecture_id, "note_index": note_index, "t": self.cache.time(lecture_id, note.segment_ids)})
         ids = [i for i in note.segment_ids if 1 <= i <= len(segments)]
         if excerpt and ids:
             text, start = transcript_excerpt(segments, min(ids))

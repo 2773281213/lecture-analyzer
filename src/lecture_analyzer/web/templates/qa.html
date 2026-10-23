@@ -58,7 +58,7 @@
       {% endif %}
       <p class="muted small">
         {{ r.models.answer }}
-        {% if r.kps %} · 相关知识点：{% for kp in r.kps %}<a href="/courses/{{ course.id }}#k-{{ kp.key }}">K{{ kp.key }} {{ kp.name }}</a>{{ "、" if not loop.last }}{% endfor %}{% endif %}
+        {% if r.kps %} · 相关知识点：{% for kp in r.kps %}<a href="{{ kp_url(course.id, kp.key) }}">K{{ kp.key }} {{ kp.name }}</a>{{ "、" if not loop.last }}{% endfor %}{% endif %}
         · {{ turn.created_at | replace("T", " ") }}
       </p>
     </article>

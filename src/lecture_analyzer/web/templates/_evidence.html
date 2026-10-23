@@ -12,7 +12,7 @@
   {% elif kind == "P" %}
   <a class="page-link" href="/materials/{{ view.material_id }}/pages/{{ view.page_no }}.png" title="课件 {{ view.label }}">课件 {{ view.label }}</a>{% if view.title %}<span class="muted">：{{ view.title }}</span>{% endif %}
   {% elif kind == "N" %}
-  笔记「{{ view.name }}」
+  笔记「{% if view.note_index %}<a class="kp-link" href="/lectures/{{ view.lecture_id }}#kp-{{ view.note_index }}">{{ view.name }}</a>{% else %}{{ view.name }}{% endif %}」
   <a class="appear" href="/lectures/{{ view.lecture_id }}{% if view.t is not none %}?t={{ view.t }}{% endif %}">第{{ view.seq }}讲{% if view.t is not none %} {{ view.t | ts }}{% endif %}</a>
   <details class="evidence-body"><summary class="small">展开要点</summary><div class="prose">{{ view.summary_md | md }}</div></details>
   {% elif kind == "T" %}

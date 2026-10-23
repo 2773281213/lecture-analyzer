@@ -121,7 +121,7 @@
       {% set link = kp_links.get(loop.index) %}
       <article id="kp-{{ loop.index }}" class="card">
         <header class="card-head">
-          <h3>{{ kp.name }}</h3>
+          <h3>{% if link %}<a class="kp-link" href="{{ kp_url(course.id, link.key) }}">{{ kp.name }}</a>{% else %}{{ kp.name }}{% endif %}</h3>
           <span class="card-meta">
             {% if t is not none %}<button class="time" data-t="{{ t }}">{{ t | ts }}</button>{% endif %}
             约 {{ '%g' | format(kp.minutes) }} 分钟{% if kp.slide_pages %} · 课件 {{ slide_pages(kp.slide_pages, page_links) }}{% endif %}
@@ -130,7 +130,7 @@
         {% if link %}
         <p class="kp-memory">
           <span class="role">{{ link.role }}</span>
-          <a href="/courses/{{ course.id }}#k-{{ link.key }}">K{{ link.key }} {{ link.name }}</a>{% if link.chapter %}<span class="muted"> · {{ link.chapter }}</span>{% endif %}
+          <a href="{{ kp_url(course.id, link.key) }}">K{{ link.key }} {{ link.name }}</a>{% if link.chapter %}<span class="muted"> · {{ link.chapter }}</span>{% endif %}
           {% for o in link.others %}<a class="appear" href="/lectures/{{ o.lecture_id }}{% if o.t is not none %}?t={{ o.t }}{% endif %}">第{{ o.seq }}讲·{{ o.role }}</a>{% endfor %}
         </p>
         {% endif %}

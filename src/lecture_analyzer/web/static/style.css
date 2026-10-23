@@ -440,3 +440,8 @@ a.cite:hover { color: var(--card); background: var(--accent); }
 .report-section { margin: 18px 0 10px; }
 .toc .toc-rest a { color: var(--muted); font-size: 13px; }
 @media print { .rest-points > summary { display: none; } }
+
+/* ---------- 知识点名称：链接到具体内容（总复习条目、讲内笔记） ---------- */
+a.kp-name, a.kp-link { color: inherit; text-decoration: underline dotted color-mix(in srgb, var(--accent) 60%, transparent); text-underline-offset: 3px; }
+a.kp-name:hover, a.kp-link:hover { color: var(--accent); text-decoration-style: solid; }
+@media print { a.kp-name, a.kp-link { text-decoration: none; } }
