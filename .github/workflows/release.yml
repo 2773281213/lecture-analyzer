@@ -1,0 +1,106 @@
+# 打包安装包并发布到 GitHub Release：推送 v* 标签时自动运行，也可以在 Actions 页面手动运行（填标签）。
+# 在 Windows 上运行 packaging/build.ps1（自带 Python、PyTorch CUDA 和本地语音识别），
+# 安装包上传到同名 Release，说明取自 docs/releases/<标签>.md。
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的标签（例如 v0.1.1，必须已经存在）"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      UV_CACHE_DIR: ${{ runner.temp }}\uv-cache  # 放在空间较大的工作盘
+      PYTHONIOENCODING: utf-8
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: 检查标签与 pyproject.toml 的版本一致
+        run: |
+          $version = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:TAG) { throw "标签 $env:TAG 与 pyproject.toml 的版本 $version 不一致" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: 安装 uv 管理的 Python 3.12
+        run: uv python install 3.12
+
+      - name: 准备 Inno Setup（含简体中文界面）和 7-Zip 的 MSI
+        run: |
+          $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1
+          }
+          & $iscc.FullName "/?" | Select-Object -First 1
+          $languages = Join-Path $iscc.DirectoryName "Languages"
+          $isl = Join-Path $languages "ChineseSimplified.isl"
+          if (-not (Test-Path $isl)) {
+            $sources = @(
+              "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl",
+              "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl"
+            )
+            foreach ($url in $sources) {
+              try { Invoke-WebRequest $url -OutFile $isl; break } catch { Write-Host "下载失败：$url" }
+            }
+          }
+          if (Test-Path $isl) { Write-Host "安装向导使用简体中文" } else { Write-Host "::warning::没有拿到 ChineseSimplified.isl，安装向导将使用英文" }
+          "ISCC=$($iscc.FullName)" >> $env:GITHUB_ENV
+
+          $msi = Join-Path $env:RUNNER_TEMP "7z-x64.msi"
+          $sources = @(
+            "https://github.com/ip7z/7zip/releases/download/25.01/7z2501-x64.msi",
+            "https://www.7-zip.org/a/7z2501-x64.msi"
+          )
+          foreach ($url in $sources) {
+            try { Invoke-WebRequest $url -OutFile $msi; break } catch { Write-Host "下载失败：$url" }
+          }
+          if (-not (Test-Path $msi)) { throw "下载 7-Zip 的 MSI 失败" }
+          "SEVENZIP_MSI=$msi" >> $env:GITHUB_ENV
+
+      - name: 打包（packaging/build.ps1）
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build.ps1 -InnoSetup "$env:ISCC" -SevenZipMsi "$env:SEVENZIP_MSI"
+
+      - name: 检查安装包大小（GitHub Release 单个文件上限 2 GiB）
+        run: |
+          $setup = Get-Item "dist\LectureAnalyzer-Setup-$env:VERSION.exe"
+          Write-Host ("安装包 {0}：{1:N2} GB" -f $setup.Name, ($setup.Length / 1GB))
+          if ($setup.Length -ge 2GB) { throw "安装包超过 2 GiB，GitHub Release 无法上传" }
+          "SETUP=$($setup.FullName)" >> $env:GITHUB_ENV
+
+      - name: 发布到 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "docs\releases\$env:TAG.md"
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG "$env:SETUP" --clobber
+          } else {
+            $ghArgs = @("release", "create", $env:TAG, "$env:SETUP", "--title", "lecture-analyzer $env:TAG", "--verify-tag")
+            if (Test-Path $notes) { $ghArgs += @("--notes-file", $notes) } else { $ghArgs += @("--generate-notes") }
+            gh @ghArgs
+          }
+          if ($LASTEXITCODE -ne 0) { throw "发布失败" }
+          gh release view $env:TAG --json url,assets --jq '.url, (.assets[] | "\(.name) \(.size)")'
