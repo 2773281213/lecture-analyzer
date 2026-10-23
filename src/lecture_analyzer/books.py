@@ -13,8 +13,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .exam_plans import ExamPlan, ExamPlanStore, plan_text
 from .knowledge import CourseMemory, KnowledgePoint
-from .library import Course, Lecture, Library
+from .library import EXAM_PLAN_LABELS, Course, Lecture, Library
 from .materials import MaterialStore
 from .pipeline.report_render import render_report_markdown
 from .pipeline.review import ChapterView, render_review_markdown, review_book
@@ -114,6 +115,7 @@ def build_course_book(
     return {
         "schema_version": BOOK_SCHEMA_VERSION,
         "course": {**_course_info(course), "instructions": course.instructions},
+        "exam_plan": _exam_plan_info(library, course),
         "lectures": [
             {"id": lecture.id, "seq": lecture.seq, "title": lecture.title, "date": lecture.date, "kind": lecture.kind,
              "duration_ms": lecture.duration_ms, "parts": len(lecture.parts), "tags": tags.get(lecture.id, []),
@@ -156,7 +158,22 @@ def export_course(library: Library, data_dir: Path, course: Course) -> dict[int,
     (folder / "课程总览.md").write_text(overview, encoding="utf-8")
     if any(chapter.state != "missing" for chapter in review):
         (folder / "总复习.md").write_text(render_review_markdown(course, review), encoding="utf-8")
+    stored = ExamPlanStore(library).get(course)
+    if stored is not None and stored.plan is not None:
+        (folder / "考试方案.md").write_text(render_exam_plan_markdown(course, stored.plan), encoding="utf-8")
     return folders
+
+
+def _exam_plan_info(library: Library, course: Course) -> dict[str, Any]:
+    stored = ExamPlanStore(library).get(course)
+    plan = stored.plan if stored else None
+    return {"state": course.exam_plan, "plan": plan.model_dump() if plan else None,
+            "confirmed_at": stored.confirmed_at if stored else ""}
+
+
+def render_exam_plan_markdown(course: Course, plan: ExamPlan) -> str:
+    state = EXAM_PLAN_LABELS.get(course.exam_plan, course.exam_plan)
+    return f"# {course.name} · 考试方案（{state}）\n\n{plan_text(plan) or '（没有内容）'}\n"
 
 
 def report_filename(report: StoredReport) -> str:

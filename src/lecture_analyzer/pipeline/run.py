@@ -4,6 +4,8 @@
 一讲由多节组成时，各节分别抽音频、分别转写（分片缓存按节保留），再拼成整讲的统一时间轴。
 开始分析前，课程必须先选择是否提供课件（课件关卡）。课件在转写之后匹配：之后再导入课件，
 只需重新匹配和整理笔记，不用重新转写；重新匹配的结果与笔记所用的页相同时，也不重新整理笔记。
+整理笔记前，考试方案必须已确认或已跳过（方案关卡，见 pipeline/exam_plan.py）：还没有方案时先从来源讲分析，
+然后停在整理笔记之前（不算失败），等用户确认后接着处理。
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from ..asr.fallback import fill_skipped
 from ..asr.models import download_models
 from ..books import export_course, work_dir
 from ..config import AppConfig
+from ..exam_plans import ExamPlanStore, plan_block
 from ..knowledge import CourseMemory
 from ..library import Course, Lecture, LecturePart, Library, LibraryError, PageRef
 from ..llm import ModelProfile, Usage, create_provider
@@ -27,6 +30,7 @@ from ..materials import PAGE_KINDS, MaterialStore
 from ..media import extract_audio, wav_duration_ms
 from ..schemas import PageDigest
 from ..timecode import format_ms
+from .exam_plan import ensure_exam_plan
 from .extract import extract_lecture, part_starts
 from .ingest import digest_materials, digest_pending
 from .integrate import IntegrateContext, IntegrateOutcome, integrate_through, plan_rebuild, rebuild
@@ -95,6 +99,8 @@ class LectureRunner:
             if not self._needs(step):
                 self.report(f"跳过「{STEP_LABELS[step]}」（已完成）")
                 continue
+            if step == "extract":  # 方案关卡：没确认时抛出 AwaitingExamPlan，这一步不记为失败
+                self.course = ensure_exam_plan(self.cfg, self.library, self.course, self.report)
             self.report(f"开始「{STEP_LABELS[step]}」…")
             try:
                 state, detail = getattr(self, f"_step_{step}")()
@@ -193,6 +199,7 @@ class LectureRunner:
             create_provider(profile), segments, digests, self.course.settings,
             effort=self.cfg.effort_for_step("extract"), starts=part_starts(segments, self.lecture.part_offsets()),
             instructions=self.course.instructions, sources=sources,
+            exam_plan=plan_block(ExamPlanStore(self.library).active(self.course), "extract"),
         )
         notes = result.output
         previous = self.library.notes(self.lecture_id)
@@ -298,6 +305,7 @@ def process_lectures(
     """依次处理讲，返回处理了几讲（命令行和后台任务共用）。
 
     lectures 为 None 时处理这门课所有没完成的讲；强制重跑某一步时为全部讲。announce 在开始处理每一讲前调用。
+    考试方案还没确认时，处理到整理笔记前停下并抛出 AwaitingExamPlan（调用方当作"等待确认"而不是失败）。
     """
     check_slides_choice(course)  # 课件关卡：先选择是否提供课件
     processed = 0

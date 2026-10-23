@@ -232,6 +232,7 @@ def m1_env(example_config: Path, tmp_path: Path, monkeypatch):
     from lecture_analyzer.config import load_config
     from lecture_analyzer.course import CourseSettings
     from lecture_analyzer.library import Library
+    from lecture_analyzer.pipeline import exam_plan as exam_plan_module
     from lecture_analyzer.pipeline import run as run_module
 
     media = make_wav(tmp_path / "药理学3.wav")
@@ -251,9 +252,11 @@ def m1_env(example_config: Path, tmp_path: Path, monkeypatch):
     monkeypatch.setattr(run_module, "create_backend", lambda *args, **kwargs: asr)
     monkeypatch.setattr(run_module, "download_models", lambda *args, **kwargs: [])
     monkeypatch.setattr(run_module, "create_provider", fake_provider)
+    monkeypatch.setattr(exam_plan_module, "create_provider", fake_provider)
     with Library(cfg.data_dir / "lecture.db") as library:
         course = library.add_course("药理学", CourseSettings(subject="药理学"))
-        library.update_course(course.id, slides="none")  # 默认不提供课件；测试课件匹配时再改
+        # 默认不提供课件、跳过考试方案；测试课件匹配、考试方案时再改
+        library.update_course(course.id, slides="none", exam_plan="skipped")
         lecture = library.add_lecture(course, 3, [media])
     return SimpleNamespace(cfg=cfg, media=media, asr=asr, provider_calls=provider_calls, lecture_id=lecture.id,
                            course_id=course.id, routes=routes, tmp_path=tmp_path)

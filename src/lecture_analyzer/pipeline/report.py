@@ -6,10 +6,14 @@
   生成报告时先更新这些考点所在章节的复习讲义（没变的章节不重新生成），再把要点复制进报告保存，
   之后总复习更新不影响已生成的报告。
 - 某个模型失败时用其余模型的结果，并在报告里注明；更新总复习失败时暂用各讲笔记原文并注明。
+- 有已确认的考试方案时（version 3）：排名的提示词附上方案，要求每种题型都给出候选，排名个数按题数放大
+  （effective_top_n）；考点的可能题型归到方案的题型名称（模型没给时用笔记里标注的题型），报告按题型分组，
+  组内保持共识顺序，并列出方案的题型分值表和答题要求。没有方案时与 version 2 完全相同。
 """
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -20,6 +24,7 @@ from typing import Any
 
 from ..books import export_course, export_report
 from ..config import AppConfig
+from ..exam_plans import ExamPlan, ExamPlanStore, plan_block
 from ..library import Course, Lecture, Library, LibraryError
 from ..llm import LLMError, TextPart, create_provider
 from ..materials import MaterialStore
@@ -32,10 +37,13 @@ from .materials import ensure_mapped, stale_materials
 from .memory import Section, assemble, input_budget, trimmed_note
 from .report_input import Evidence, build_evidence, rank_sections, scope_statements, type_stats
 from .review import EntryView, update_review_for
-from .scoring import KPScore, Scope, Scoring, score_course
+from .scoring import KPScore, Scope, Scoring, plan_types, score_course
 
 Report = Callable[[str], None]
 REPORT_VERSION = 2  # 1：M3 的旧版报告（排名、理由、证据、叙述）；2：只给知识点本身
+PLAN_REPORT_VERSION = 3  # 有考试方案时：在 2 的基础上按题型分组，附题型分值表和答题要求
+MAX_TOP_N = 40  # 按题数放大后的排名个数上限
+OTHER_GROUP = "其他考点"
 _EVIDENCE_ID = re.compile(r"^\s*([QMPENT])\s*(\d+)\s*$", re.I)  # 问答另有笔记要点 N、转写片段 T
 
 
@@ -82,6 +90,8 @@ class ReportContext:
     stats: list[dict[str, Any]]
     runs: list[ModelRun] = field(default_factory=list)  # 成功的模型
     consensus: list[tuple[int, int]] = field(default_factory=list)  # （K 编号，共识分）
+    plan: ExamPlan | None = None  # 已确认的考试方案
+    top_n: int = 15  # 每个模型排出前几个（有方案时按题数放大）
 
     def use_runs(self, runs: Sequence[ModelRun]) -> None:
         """记下成功的模型，算共识；没有一个模型成功时报错。"""
@@ -90,7 +100,7 @@ class ReportContext:
             raise LLMError("所有模型都没能给出排名：" + "；".join(f"{run.name}：{run.error}" for run in runs))
         rankings = {run.name: [entry.key for entry in run.ranking] for run in self.runs}
         tiebreak = {item.kp.key: item.score for item in self.scoring.ranked}
-        self.consensus = borda(rankings, self.cfg.report.top_n, tiebreak)
+        self.consensus = borda(rankings, self.top_n, tiebreak)
 
     def entries(self, key: int) -> list[RankedEntry]:
         return [e for run in self.runs for e in run.ranking if e.key == key]
@@ -125,8 +135,18 @@ def prepare_context(cfg: AppConfig, library: Library, plan: ReportPlan) -> Repor
     if not scoring.ranked:
         raise LibraryError("所选范围里还没有可以分析的知识点：先处理至少一讲，或导入资料并对应到知识点")
     evidence = build_evidence(library, plan.course, scoring, plan.scope)
+    exam_plan = ExamPlanStore(library).active(plan.course)
     return ReportContext(cfg, plan.course, scoring, evidence, scope_statements(scoring, evidence),
-                         type_stats(library, plan.course, plan.scope.material_ids))
+                         type_stats(library, plan.course, plan.scope.material_ids), plan=exam_plan,
+                         top_n=effective_top_n(cfg.report.top_n, exam_plan))
+
+
+def effective_top_n(base: int, plan: ExamPlan | None) -> int:
+    """有考试方案时，排名个数至少要覆盖各题型的题数：每种题型取 题数 × 1.5（最多 10 个，没写题数算 3 个）。"""
+    if plan is None or not plan.question_types:
+        return base
+    wanted = sum(min(math.ceil(item.count * 1.5), 10) if item.count else 3 for item in plan.question_types)
+    return min(max(base, wanted), MAX_TOP_N)
 
 
 # ---------- 各模型排名 ----------
@@ -139,8 +159,9 @@ def _rank_with(ctx: ReportContext, library: Library, name: str, sections: list[S
         provider = create_provider(profile)
         settings = ctx.course.settings
         system = load_prompt("report_rank", subject=settings.subject, teaching=settings.teaching_description,
-                             instructions=instructions_block(ctx.course.instructions), top_n=str(cfg.report.top_n))
-        ask = f"请输出最可能考的 {cfg.report.top_n} 个知识点。"
+                             instructions=instructions_block(ctx.course.instructions), top_n=str(ctx.top_n),
+                             exam_plan=plan_block(ctx.plan, "report"))
+        ask = f"请输出最可能考的 {ctx.top_n} 个知识点。"
         assembled = assemble(sections, input_budget(profile, cfg.report.budget), profile,
                              fixed_chars=len(system) + len(ask))
         report(f"{name}（{profile.model}）正在排名…")
@@ -151,12 +172,14 @@ def _rank_with(ctx: ReportContext, library: Library, name: str, sections: list[S
         return ModelRun(name, error=f"{type(exc).__name__}: {exc}")
     library.log_call(None, "report", profile, result.usage, course_id=ctx.course.id)
     valid = {item.kp.key for item in ctx.scoring.ranked}
-    ranking = resolve_ranking(result.output, valid, set(ctx.evidence.views), cfg.report.top_n)
+    ranking = resolve_ranking(result.output, valid, set(ctx.evidence.views), ctx.top_n, ctx.plan)
     return ModelRun(name, profile.model, ranking, note=trimmed_note(assembled.trimmed))
 
 
-def resolve_ranking(output: KPRanking, valid_keys: set[int], valid_ids: set[str], top_n: int) -> list[RankedEntry]:
-    """只保留有效且不重复的知识点（老师说不考的不在 valid_keys 里），证据编号必须存在，最多 top_n 个。"""
+def resolve_ranking(output: KPRanking, valid_keys: set[int], valid_ids: set[str], top_n: int,
+                    plan: ExamPlan | None = None) -> list[RankedEntry]:
+    """只保留有效且不重复的知识点（老师说不考的不在 valid_keys 里），证据编号必须存在，最多 top_n 个。
+    有考试方案时，题型归到方案里的题型名称（认不出的去掉）。"""
     entries: list[RankedEntry] = []
     for item in output.ranking:
         key = parse_key(item.kp)
@@ -164,6 +187,8 @@ def resolve_ranking(output: KPRanking, valid_keys: set[int], valid_ids: set[str]
             continue
         ids = [eid for eid in dict.fromkeys(normalize_id(text) for text in item.evidence) if eid in valid_ids]
         types = [t.strip() for t in item.question_types if t.strip()]
+        if plan is not None:
+            types = plan_types(plan, types) if plan.question_types else types
         entries.append(RankedEntry(key, item.reason.strip(), types, ids))
         if len(entries) >= top_n:
             break
@@ -190,7 +215,7 @@ def borda(rankings: dict[str, list[int]], top_n: int, tiebreak: dict[int, float]
 def assemble_report(ctx: ReportContext, plan: ReportPlan, runs: Sequence[ModelRun], entries: dict[int, EntryView],
                     warnings: Sequence[str]) -> dict[str, Any]:
     by_key = ctx.scoring.by_key()
-    return {
+    result = {
         "version": REPORT_VERSION,
         "course": ctx.course.name,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -201,14 +226,40 @@ def assemble_report(ctx: ReportContext, plan: ReportPlan, runs: Sequence[ModelRu
         "excluded": [{"key": item.kp.key, "name": item.kp.name} for item in ctx.scoring.excluded],
         "warnings": list(warnings),
     }
+    if ctx.plan is not None and ctx.plan.question_types:
+        result.update(plan_sections(ctx.plan, result["points"]))
+    return result
+
+
+def plan_sections(plan: ExamPlan, points: list[dict[str, Any]]) -> dict[str, Any]:
+    """version 3：题型分值表、答题要求，以及按题型分组（每个考点归到它最可能的题型，组内保持共识顺序）。"""
+    names = plan.type_names()
+    groups: dict[str, list[int]] = {name: [] for name in names}
+    groups[OTHER_GROUP] = []
+    for point in points:
+        group = next((t for t in point["types"] if t in groups), OTHER_GROUP)
+        point["group"] = group
+        groups[group].append(point["rank"])
+    table = [{"name": t.name, "count": t.count, "points_each": t.points_each, "total_points": t.total_points,
+              "share": t.share, "note": t.note} for t in plan.question_types]
+    return {
+        "version": PLAN_REPORT_VERSION,
+        "plan_table": table,
+        "plan_form": plan.exam_form,
+        "answer_rules": [{"type": r.question_type, "text": r.text} for r in plan.answer_rules],
+        "groups": [{"type": name, "ranks": ranks} for name, ranks in groups.items() if ranks or name != OTHER_GROUP],
+    }
 
 
 def _point(ctx: ReportContext, item: KPScore, position: int, entry: EntryView) -> dict[str, Any]:
-    """报告里的一个考点：只有结论（名称、星级、可能题型、要点），不带理由和证据。"""
-    types = Counter(t for e in ctx.entries(item.kp.key) for t in e.types)
+    """报告里的一个考点：只有结论（名称、星级、可能题型、要点），不带理由和证据。
+    有考试方案时，模型没给出题型的考点用笔记里按方案标注的题型。"""
+    counted = Counter(t for e in ctx.entries(item.kp.key) for t in e.types)
+    types = [t for t, _ in counted.most_common()]
+    if ctx.plan is not None and not types:
+        types = list(item.types)
     return {"rank": position, "key": item.kp.key, "name": item.kp.name, "chapter": item.kp.chapter,
-            "priority": entry.priority, "types": [t for t, _ in types.most_common()],
-            "summary_md": entry.summary_md, "lectures": item.lectures}
+            "priority": entry.priority, "types": types, "summary_md": entry.summary_md, "lectures": item.lectures}
 
 
 # ---------- 保存 ----------

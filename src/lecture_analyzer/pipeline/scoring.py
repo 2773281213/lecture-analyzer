@@ -2,7 +2,8 @@
 
 - 课堂：只计通过原话校验的信号，权重 × 强度；
 - 资料：往年真题、模拟题、复习提纲、考试通知等里出现的题目，权重 × 分值系数（按同一份资料里分值的中位数折算，0.5–上限）；
-- 加分：多讲出现、讲解时长、复习课里出现、课堂和资料里都出现；
+- 加分：多讲出现、讲解时长、复习课里出现、课堂和资料里都出现；有已确认的考试方案时，再加「题型匹配」：
+  权重 × 知识点适合的各题型（笔记里按方案标注）在方案里的分值占比之和（最多算 1）；
 - 老师明确说不考（强度 3）或考试通知说不考、又没有说要考的知识点，分数清零，单独列出；
   较弱的"不考"（如"不用每种都背""这部分了解即可"）往往只排除一部分内容，只扣分，不整体排除。
 """
@@ -14,7 +15,8 @@ from dataclasses import dataclass, field
 from statistics import median
 
 from ..config import ScoringConfig
-from ..knowledge import CourseMemory, HistorySignal, KnowledgePoint
+from ..exam_plans import ExamPlan, ExamPlanStore
+from ..knowledge import CourseMemory, HistorySignal, KnowledgePoint, LectureCache
 from ..library import Course, Library
 from ..materials import MATERIAL_KINDS
 from ..render import KIND_LABELS, SIGNAL_LABELS
@@ -44,6 +46,7 @@ class KPScore:
     hits: list[MaterialHit]
     parts: list[ScorePart] = field(default_factory=list)
     excluded: bool = False  # 老师或考试通知说不考
+    types: list[str] = field(default_factory=list)  # 适合的题型（按考试方案整理的笔记里标注的，归到方案的题型名称）
 
     @property
     def score(self) -> float:
@@ -88,10 +91,14 @@ def score_course(library: Library, course: Course, cfg: ScoringConfig, scope: Sc
     hits = {key: [h for h in values if scope.has_material(h.material.id)]
             for key, values in material_hits(library, course).items()}
     factors = _score_factors([h for values in hits.values() for h in values], cfg.max_score_factor)
+    plan = ExamPlanStore(library).active(course)
+    cache = LectureCache(library) if plan else None
     scores = []
     for kp in _in_scope(memory.tree(course), scope, hits):
         item = KPScore(kp, signals.get(kp.key, []), hits.get(kp.key, []))
-        item.parts = score_parts(item, cfg, kinds, factors)
+        if plan and cache:
+            item.types = plan_types(plan, cache.kp_question_types(kp))
+        item.parts = score_parts(item, cfg, kinds, factors) + type_fit_parts(item.types, plan, cfg)
         item.excluded = is_excluded(item)
         scores.append(item)
     ranked = sorted((s for s in scores if not s.excluded), key=lambda s: (-s.score, _first_seq(s), s.kp.key))
@@ -173,6 +180,24 @@ def _bonuses(item: KPScore, cfg: ScoringConfig, kinds: dict[int, str]) -> list[S
     if exam_hits and (item.signals or item.kp.appearances):
         bonuses.append(ScorePart("课堂和资料里都出现", cfg.class_and_material))
     return bonuses
+
+
+def plan_types(plan: ExamPlan, names: Sequence[str]) -> list[str]:
+    """笔记里标注的题型 → 方案里的题型名称（认不出的去掉），按方案的顺序。"""
+    matched = {item.name for name in names if (item := plan.match_type(name)) is not None}
+    return [item.name for item in plan.question_types if item.name in matched]
+
+
+def type_fit_parts(types: Sequence[str], plan: ExamPlan | None, cfg: ScoringConfig) -> list[ScorePart]:
+    """题型匹配：权重 × 适合的各题型在方案里的分值占比之和（最多算 1）；没有方案、没有标注或方案没给分值时不加分。"""
+    if plan is None or not types or cfg.question_type_fit <= 0:
+        return []
+    shares = {item.name: item.share for item in plan.question_types}
+    share = min(sum(shares.get(name, 0) for name in types), 1.0)
+    if share <= 0:
+        return []
+    return [ScorePart(f"题型匹配：{'、'.join(types)}（占 {share:.0%}）×{cfg.question_type_fit:g}",
+                      round(cfg.question_type_fit * share, 2))]
 
 
 def _score_factors(hits: Sequence[MaterialHit], cap: float) -> dict[int, float]:

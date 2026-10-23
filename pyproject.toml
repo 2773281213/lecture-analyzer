@@ -1,6 +1,6 @@
 [project]
 name = "lecture-analyzer"
-version = "0.1.1"
+version = "0.2.0"
 description = "课程录音分析与考点预测工具"
 readme = "README.md"
 license = "MIT"

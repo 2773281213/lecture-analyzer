@@ -117,6 +117,7 @@ def _merge_points(points: Sequence[KnowledgePointNote]) -> list[KnowledgePointNo
             slide_pages=sorted({*old.slide_pages, *kp.slide_pages}),
             segment_ids=sorted({*old.segment_ids, *kp.segment_ids}),
             minutes=old.minutes + kp.minutes,
+            question_types=list(dict.fromkeys([*old.question_types, *kp.question_types])),
         )
     return list(merged.values())
 

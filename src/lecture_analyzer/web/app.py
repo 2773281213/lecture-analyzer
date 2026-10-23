@@ -37,16 +37,16 @@ from ..job_runner import JobRunner
 from ..jobs import ACTIVE_STATES, Job, JobStore
 from ..jobs import STATE_LABELS as JOB_STATES
 from ..knowledge import CourseMemory
-from ..library import SLIDES_LABELS, Course, Lecture, Library, LibraryError
+from ..library import EXAM_PLAN_LABELS, SLIDES_LABELS, Course, Lecture, Library, LibraryError
 from ..materials import MATERIAL_KINDS, Material, MaterialStore
 from ..pipeline.ingest import page_image
-from ..pipeline.report_render import evidence_text, render_report_markdown
+from ..pipeline.report_render import evidence_text, render_report_markdown, type_brief
 from ..pipeline.run import STEP_LABELS as RUN_STEP_LABELS
 from ..pipeline.run import STEPS
 from ..render import KIND_LABELS, SIGNAL_LABELS, quote_html, zh_aliases
 from ..reports import ReportStore, StoredReport
 from ..timecode import format_ms
-from . import actions, manage_courses, manage_lectures, qa_page, settings_page
+from . import actions, exam_plan_page, manage_courses, manage_lectures, qa_page, settings_page
 from .forms import take_flash
 from .rendering import cite_links, evidence_url, kp_url, render_markdown
 from .views import (
@@ -79,7 +79,7 @@ def create_app(cfg: AppConfig, allowed_hosts: Sequence[str] = ALLOWED_HOSTS) -> 
     templates = _templates(app.state.csrf_token, db_path)
     app.state.templates = templates
     app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
-    for module in (actions, manage_courses, manage_lectures, settings_page, qa_page):
+    for module in (actions, manage_courses, manage_lectures, settings_page, qa_page, exam_plan_page):
         app.include_router(module.router)
     _register_errors(app, templates)
     _register_pages(app, templates, db_path)
@@ -99,9 +99,10 @@ def _templates(csrf_token: str, db_path: Path) -> Jinja2Templates:
 
     templates.env.globals.update(
         SIGNAL_LABELS=SIGNAL_LABELS, KIND_LABELS=KIND_LABELS, STATE_LABELS=STATE_LABELS, SORTS=SORTS,
-        SLIDES_LABELS=SLIDES_LABELS, MATERIAL_KINDS=MATERIAL_KINDS, JOB_STATES=JOB_STATES,
+        SLIDES_LABELS=SLIDES_LABELS, EXAM_PLAN_LABELS=EXAM_PLAN_LABELS, MATERIAL_KINDS=MATERIAL_KINDS,
+        JOB_STATES=JOB_STATES,
         RUN_STEPS=[(step, RUN_STEP_LABELS[step]) for step in STEPS], lecture_state=lecture_state,
-        evidence_url=evidence_url, kp_url=kp_url, take_flash=take_flash, active_job_count=active_job_count,
+        evidence_url=evidence_url, kp_url=kp_url, type_brief=type_brief, take_flash=take_flash, active_job_count=active_job_count,
         csrf_token=csrf_token, static_version=_static_version(),
         quote_html=lambda quote, meaning="": Markup(quote_html(quote, meaning)),  # 内容已转义
     )

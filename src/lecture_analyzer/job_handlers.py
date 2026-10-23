@@ -64,7 +64,10 @@ class _LectureReport:
 
 
 def _run(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[str, Any]:
-    """处理讲：lectures 为讲的编号（空表示这门课所有没完成的讲）；force 为要重跑的步骤（all 表示全部）。"""
+    """处理讲：lectures 为讲的编号（空表示这门课所有没完成的讲）；force 为要重跑的步骤（all 表示全部）。
+
+    考试方案还没确认时停在整理笔记之前：任务照常结束（不算失败），结果转到课程页的考试方案。"""
+    from .pipeline.exam_plan import AwaitingExamPlan
     from .pipeline.run import STEPS, RunOptions, process_lectures
 
     course = _course(library, job)
@@ -74,8 +77,11 @@ def _run(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[str
     options = RunOptions(force=frozenset(STEPS if "all" in force else force & set(STEPS)),
                          model=params.get("model") or None, asr=params.get("asr") or None)
     progress = _LectureReport(report)
-    processed = process_lectures(cfg, library, course, [library.lecture_by_id(i) for i in ids] or None, options,
-                                 progress, progress.announce)
+    try:
+        processed = process_lectures(cfg, library, course, [library.lecture_by_id(i) for i in ids] or None, options,
+                                     progress, progress.announce)
+    except AwaitingExamPlan as exc:
+        return {"url": _course_url(course, "#exam-plan"), "summary": str(exc), "awaiting_exam_plan": True}
     url = f"/lectures/{ids[0]}" if len(ids) == 1 else _course_url(course)
     return {"url": url, "summary": f"处理了 {processed} 讲" if processed else "所有讲都已处理完成"}
 
@@ -91,6 +97,16 @@ def _rebuild(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict
         return {"url": _course_url(course), "summary": "课程记忆已是最新，不需要重建"}
     return {"url": _course_url(course),
             "summary": f"重放 {outcome.replayed} 讲、重新整合 {len(outcome.integrated)} 讲，已重新导出"}
+
+
+def _exam_plan(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[str, Any]:
+    """分析考试方案（来源讲和考试说明在提交前已保存），结果为待确认的草稿。"""
+    from .pipeline.exam_plan import analyze_exam_plan
+
+    course = _course(library, job)
+    lecture_id = job.params.get("lecture")
+    analysis = analyze_exam_plan(cfg, library, course, int(lecture_id) if lecture_id else None, report=report)
+    return {"url": _course_url(course, "#exam-plan"), "summary": f"考试方案待确认：{analysis.summary}"}
 
 
 # ---------- 课程资料 ----------
@@ -193,6 +209,7 @@ def _qa(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[str,
 HANDLERS: dict[str, Handler] = {
     "run": _run,
     "rebuild": _rebuild,
+    "exam_plan": _exam_plan,
     "import_material": _import_material,
     "process_material": _process_material,
     "download_models": _download_models,

@@ -132,6 +132,16 @@ class KnowledgePointNote(BaseModel):
     slide_pages: list[int]
     segment_ids: list[int]
     minutes: float = Field(description="大约讲了多少分钟，可根据句子时间戳估算")
+    question_types: list[str] = Field(
+        description="按考试方案，这个知识点适合出成哪些题型（只能从方案的题型里选）；没有考试方案时输出空列表")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _without_question_types(cls, data: object) -> object:
+        """v0.2.0 之前保存的笔记没有 question_types：读出时当作空。给模型的输出结构里它仍是必填项。"""
+        if isinstance(data, dict) and "question_types" not in data:
+            return {**data, "question_types": []}
+        return data
 
 
 class WorkedExample(BaseModel):
@@ -210,3 +220,59 @@ class ReviewEntry(BaseModel):
 class ReviewChapter(BaseModel):
     overview_md: str = Field(description="本章导语：这一章讲什么、复习时抓什么")
     entries: list[ReviewEntry]
+
+
+# ---------- 考试方案（先于知识点分析：考核方式、题型分值、答题要求、考试范围） ----------
+
+PlanSourceType = Literal["user", "material", "lecture"]
+_SOURCE_DESC = "出处：user 用户提供的考试说明，material 考试通知、复习提纲等资料，lecture 课堂转写"
+_QUOTE_DESC = ("依据的原文：lecture 时逐字摘自转写的连续片段（不要改写、不要翻译），user、material 时摘自说明或资料原文；"
+               "控制在 80 字以内")
+
+
+class PlanComponentOut(BaseModel):
+    name: str = Field(description="成绩组成部分，如 平时成绩、期中考试、期末考试、实验")
+    percent: float = Field(description="占总评的百分比，如 70；没有说时填 0")
+    source: PlanSourceType = Field(description=_SOURCE_DESC)
+    quote: str = Field(description=_QUOTE_DESC)
+    segment_ids: list[int] = Field(description="lecture 出处的转写句子编号（S 后面的数字）；其他出处为空列表")
+
+
+class PlanQuestionTypeOut(BaseModel):
+    type: str = Field(description="题型名称，按来源原文写，如 选择题、A1 型题、名词解释、简答题、论述题、病例分析")
+    count: int = Field(description="题数；没有说时填 0")
+    points_each: float = Field(description="每题分值；没有说时填 0")
+    total_points: float = Field(description="这种题型合计多少分；只说了合计时填这里，没有说时填 0")
+    note: str = Field(description="补充说明，如「6 题选做 4 题」「中英文均可」；没有时填空字符串")
+    source: PlanSourceType = Field(description=_SOURCE_DESC)
+    quote: str = Field(description=_QUOTE_DESC)
+    segment_ids: list[int] = Field(description="lecture 出处的转写句子编号；其他出处为空列表")
+
+
+class PlanRuleOut(BaseModel):
+    text: str = Field(description="老师规定的答题方向或要求，如「简答题按要点给分，要写出作用机制和临床应用」")
+    question_type: str = Field(description="适用的题型名称（与 question_types 里的写法一致）；对所有题型都适用时填空字符串")
+    source: PlanSourceType = Field(description=_SOURCE_DESC)
+    quote: str = Field(description=_QUOTE_DESC)
+    segment_ids: list[int] = Field(description="lecture 出处的转写句子编号；其他出处为空列表")
+
+
+class PlanScopeOut(BaseModel):
+    kind: Literal["include", "exclude", "focus"] = Field(description="include 要考，exclude 不考，focus 重点")
+    text: str = Field(description="范围说明，如「第三章全部要考」「药物经济学不考」")
+    source: PlanSourceType = Field(description=_SOURCE_DESC)
+    quote: str = Field(description=_QUOTE_DESC)
+    segment_ids: list[int] = Field(description="lecture 出处的转写句子编号；其他出处为空列表")
+
+
+class ExamPlanOutput(BaseModel):
+    exam_form: str = Field(description="考核方式，如 闭卷笔试、开卷、机考、论文；来源里没有提到时填空字符串")
+    duration_minutes: int = Field(description="考试时长（分钟）；没有说时填 0")
+    total_points: float = Field(description="试卷总分；没有说时填 0")
+    components: list[PlanComponentOut] = Field(description="成绩构成；没有说时为空列表")
+    question_types: list[PlanQuestionTypeOut] = Field(description="题型及分值；没有说时为空列表")
+    answer_rules: list[PlanRuleOut] = Field(description="老师规定的答题方向和要求；没有说时为空列表")
+    scope: list[PlanScopeOut] = Field(description="考试范围、不考的内容、重点；没有说时为空列表")
+    not_mentioned: list[str] = Field(
+        description="来源里没有提到的项目，从 考核方式、成绩构成、题型、分值、答题要求、考试范围 里选")
+

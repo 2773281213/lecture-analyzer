@@ -63,20 +63,29 @@ def validate_signals(signals: Sequence[Signal], segments: Sequence[Segment]) -> 
 
 
 def check_signal(signal: Signal, index: TranscriptIndex) -> CheckedSignal:
-    quote = normalize_zh(signal.quote)
-    if not quote:
+    if not normalize_zh(signal.quote):
         # 只有"跳过的课件页"允许不带原话，此时以课件页码为证据
         valid = signal.type == "skipped_slide" and bool(signal.slide_pages)
         return CheckedSignal(signal, valid, "slide" if valid else "", signal.segment_ids)
-    window = index.window(signal.segment_ids)
-    if window and quote in window:
-        return CheckedSignal(signal, True, "window", signal.segment_ids)
-    if window and len(quote) >= MIN_FUZZY_CHARS and fuzz.partial_ratio(quote, window) >= FUZZY_THRESHOLD:
-        return CheckedSignal(signal, True, "fuzzy", signal.segment_ids)
-    located = index.locate(quote)
+    method, segment_ids = check_quote(signal.quote, signal.segment_ids, index)
+    return CheckedSignal(signal, bool(method), method, segment_ids)
+
+
+def check_quote(quote: str, segment_ids: Sequence[int], index: TranscriptIndex) -> tuple[str, list[int]]:
+    """原话按三级匹配核对，返回（匹配方式 window / fuzzy / global，核对不上为空串；原话所在的句子编号）。
+    考点信号和考试方案的课堂出处共用。"""
+    text = normalize_zh(quote)
+    if not text:
+        return "", list(segment_ids)
+    window = index.window(segment_ids)
+    if window and text in window:
+        return "window", list(segment_ids)
+    if window and len(text) >= MIN_FUZZY_CHARS and fuzz.partial_ratio(text, window) >= FUZZY_THRESHOLD:
+        return "fuzzy", list(segment_ids)
+    located = index.locate(text)
     if located is not None:
-        return CheckedSignal(signal, True, "global", located)
-    return CheckedSignal(signal, False, "", signal.segment_ids)
+        return "global", located
+    return "", list(segment_ids)
 
 
 def pass_rate(checked: Sequence[CheckedSignal]) -> float:

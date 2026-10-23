@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..books import course_dir, export_course, lecture_dir, work_dir
+from ..exam_plans import ExamPlanStore, plan_block
 from ..jobs import ensure_idle
 from ..knowledge import CourseMemory
 from ..library import Course, Lecture, Library, LibraryError
@@ -35,6 +36,11 @@ def rerun_step_for_move(source: Course, target: Course) -> str:
     if (a.subject, source.instructions) != (b.subject, target.instructions):
         return "extract"
     return "integrate"
+
+
+def _plan_text(library: Library, course: Course) -> str:
+    """整理笔记时用的考试方案文字（没有已确认的方案时为空）。"""
+    return plan_block(ExamPlanStore(library).active(course), "extract")
 
 
 def rerun_step_for_settings(old: Course, new: Course) -> str | None:
@@ -70,6 +76,8 @@ def move_lecture(
     library.move_lecture(lecture.id, target, seq)
     memory.drop_lecture(lecture.id)  # 旧课程里的整合日志作废
     rerun_from = rerun_step_for_move(source, target)
+    if rerun_from == "integrate" and _plan_text(library, source) != _plan_text(library, target):
+        rerun_from = "extract"  # 两门课的考试方案不同：笔记要按新课程的方案重新整理
     library.reset_steps(lecture.id, [rerun_from, "integrate", "book"])
     stale = restore_prefix(library, memory, source, lecture.seq) + restore_prefix(library, memory, target, seq)
     moved = library.lecture_by_id(lecture.id)

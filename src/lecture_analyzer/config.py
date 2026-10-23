@@ -68,6 +68,17 @@ class ScoringConfig(BaseModel):
     review_lecture: float = 3  # 在复习课里出现
     class_and_material: float = 3  # 课堂和资料里都出现
     max_score_factor: float = 2  # 题目分值系数的上限
+    question_type_fit: float = 6  # 题型匹配：权重 × 知识点适合的各题型在考试方案里的分值占比之和（最多算 1）
+
+
+class ExamPlanConfig(BaseModel):
+    """考试方案（先于知识点分析）。分析来源讲的转写时只送和考试有关的部分：开头若干分钟，加上提到考试、题型、
+    分值等关键词的句子前后各若干分钟。"""
+
+    auto_confirm: bool = False  # 分析出方案后直接采用，不停下来等用户确认
+    lead_minutes: float = 40
+    window_minutes: float = 2
+    budget: int = 40_000  # 分析请求的输入上限（token），还受模型上下文约束
 
 
 class ReportConfig(BaseModel):
@@ -83,7 +94,7 @@ class ReportConfig(BaseModel):
 DEFAULT_STEPS = {"integrate": "claude", "review": "claude", "material": "claude", "report": "claude", "qa": "claude"}
 DEFAULT_EFFORT: dict[str, Effort] = {
     "integrate": "medium", "review": "medium", "match": "low", "material": "medium", "report": "high",
-    "qa_retrieve": "low", "qa": "medium",
+    "qa_retrieve": "low", "qa": "medium", "exam_plan": "medium",
 }
 
 
@@ -96,6 +107,7 @@ class AppConfig(BaseModel):
     materials: MaterialsConfig = MaterialsConfig()
     scoring: ScoringConfig = ScoringConfig()
     report: ReportConfig = ReportConfig()
+    exam_plan: ExamPlanConfig = ExamPlanConfig()
     models: dict[str, ModelProfile] = {}
     steps: dict[str, str] = {}
     effort: dict[str, Effort] = {}
@@ -202,6 +214,8 @@ def load_config(path: Path | None = None) -> AppConfig:
         steps = {**DEFAULT_STEPS, **raw.get("steps", {})}
         steps.setdefault("match", steps.get("page_digest", "gemini"))
         steps.setdefault("qa_retrieve", steps["match"])
+        if "extract" in steps:  # 考试方案（exam_plan）没写时与整理笔记用同一个档案
+            steps.setdefault("exam_plan", steps["extract"])
         return AppConfig(
             root=config_path.parent,
             source=config_path,
@@ -211,6 +225,7 @@ def load_config(path: Path | None = None) -> AppConfig:
             materials=raw.get("materials", {}),
             scoring=raw.get("scoring", {}),
             report=raw.get("report", {}),
+            exam_plan=raw.get("exam_plan", {}),
             models=models,
             steps=steps,
             effort={**DEFAULT_EFFORT, **raw.get("effort", {})},

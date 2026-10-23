@@ -13,6 +13,7 @@ from rich.table import Table
 
 from .cli_common import ConfigOption, console, friendly_errors, load_cfg, open_library, progress
 from .cli_materials import lecture_pages, material_app, report
+from .cli_plan import plan_app
 from .asr import language_problem
 from .config import AppConfig, ConfigError
 from .course import CourseSettings, build_settings
@@ -26,6 +27,7 @@ lecture_app = typer.Typer(help="管理讲（书里的章；一讲可以由多节
 app.add_typer(course_app, name="course")
 app.add_typer(lecture_app, name="lecture")
 app.add_typer(material_app, name="material")
+app.add_typer(plan_app, name="plan")
 lecture_app.command("pages")(lecture_pages)
 app.command("report")(report)
 
@@ -402,6 +404,7 @@ def run(
     config: ConfigOption = None,
 ) -> None:
     """处理讲：抽音频 → 转写 → 匹配课件 → 整理笔记 → 校验原话 → 整合课程记忆 → 上架。可以断点续跑。"""
+    from .pipeline.exam_plan import AwaitingExamPlan
     from .pipeline.run import STEPS, RunOptions, check_slides_choice, process_lectures
 
     cfg = load_cfg(config)
@@ -415,10 +418,16 @@ def run(
         target = library.course(course)
         check_slides_choice(target)  # 课件关卡：先选择是否提供课件
         lectures = None if seq is None else [library.lecture(target, seq)]
-        processed = process_lectures(
-            cfg, library, target, lectures, options, progress,
-            announce=lambda lecture: console.print(f"[bold]「{escape(course)}」第 {lecture.seq} 讲[/bold]"),
-        )
+        try:
+            processed = process_lectures(
+                cfg, library, target, lectures, options, progress,
+                announce=lambda lecture: console.print(f"[bold]「{escape(course)}」第 {lecture.seq} 讲[/bold]"),
+            )
+        except AwaitingExamPlan as exc:  # 停在整理笔记之前，不算出错
+            console.print(f"[yellow]{escape(str(exc))}[/yellow]")
+            console.print(f"查看：`lec plan show {course}`；确认：`lec plan confirm {course}`；"
+                          f"跳过：`lec plan skip {course}`。确认后再运行 `lec run {course}` 接着处理")
+            return
     if not processed:
         console.print("所有讲都已处理完成")
         return

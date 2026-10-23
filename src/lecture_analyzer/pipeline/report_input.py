@@ -192,7 +192,8 @@ def _kp_line(item: KPScore) -> str:
     lectures = "、".join(str(seq) for seq in item.lectures)
     taught = f"第{lectures}讲，约 {item.minutes:.0f} 分钟" if lectures else "课上没讲到（只在资料里）"
     chapter = f"｜{item.kp.chapter}" if item.kp.chapter else ""
-    return f"[K{item.kp.key}] {item.kp.name}{chapter}｜{taught}｜参考分 {item.score:g}"
+    types = f"｜适合题型：{'、'.join(item.types)}" if item.types else ""  # 有考试方案时才有
+    return f"[K{item.kp.key}] {item.kp.name}{chapter}｜{taught}{types}｜参考分 {item.score:g}"
 
 
 def evidence_items(evidence: Evidence, prefix: str, render: Any) -> list[Item]:

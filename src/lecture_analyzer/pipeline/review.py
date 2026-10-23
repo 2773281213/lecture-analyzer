@@ -18,6 +18,7 @@ from typing import Any, Callable, Sequence
 from pydantic import BaseModel
 
 from ..config import AppConfig
+from ..exam_plans import ExamPlanStore, plan_block
 from ..knowledge import CourseMemory, HistorySignal, KnowledgePoint, LectureCache, StoredReview
 from ..library import Course, Library
 from ..llm import LLMProvider, TextPart, create_provider
@@ -165,6 +166,9 @@ def _chapter_input(material: CourseMaterial, chapter: str, points: Sequence[Know
     for kp in points:
         line = f"- [K{kp.key}] {kp.name}" + (f"（又称：{'、'.join(kp.aliases)}）" if kp.aliases else "") + "｜" + \
             "、".join(f"第{a.seq}讲{ROLE_LABELS.get(a.role, a.role)}" for a in kp.appearances)
+        types = material.kp_question_types(kp)
+        if types:  # 按考试方案整理的笔记才有；没有时与原来的写法相同（已生成的章节不会因此变成待更新）
+            line += "｜适合题型：" + "、".join(types)
         kp_items.append(Item(line, line))
         lecture_items += _lecture_items(material, kp, data)
         quote_items += _quote_items(material, kp, data)
@@ -223,7 +227,8 @@ def _example_items(material: CourseMaterial, kp: KnowledgePoint, data: ChapterIn
 # ---------- 生成 ----------
 
 
-def build_system_prompt(course: Course) -> str:
+def build_system_prompt(course: Course, exam_plan: str = "") -> str:
+    """exam_plan 为已确认的考试方案（没有时为空，提示词不变）；它也进入各章的指纹，方案变了相关章节标为待更新。"""
     settings = course.settings
     return load_prompt(
         "review",
@@ -232,7 +237,13 @@ def build_system_prompt(course: Course) -> str:
         note_language=settings.note_language_name,
         term_rule=settings.term_rule,
         instructions=instructions_block(course.instructions),
+        exam_plan=exam_plan,
     )
+
+
+def course_system_prompt(library: Library, course: Course) -> str:
+    """按课程已确认的考试方案组装总复习的系统提示词。"""
+    return build_system_prompt(course, plan_block(ExamPlanStore(library).active(course), "review"))
 
 
 @dataclass
@@ -244,7 +255,7 @@ class PlannedChapter:
 
 def plan_review(library: Library, course: Course, regenerate_all: bool = False) -> list[PlannedChapter]:
     material = CourseMaterial(library, course)
-    system = build_system_prompt(course)
+    system = course_system_prompt(library, course)
     stored = CourseMemory(library).reviews(course.id)
     planned = []
     for chapter in chapter_inputs(material):
@@ -294,7 +305,7 @@ def generate_review(ctx: ReviewContext, course: Course, planned: Sequence[Planne
     """生成需要更新的章节，返回各章的处理说明；已经不存在的章节一并删除。"""
     memory = CourseMemory(ctx.library)
     profile = ctx.provider.profile
-    system = build_system_prompt(course)
+    system = course_system_prompt(ctx.library, course)
     notes = []
     for item in (p for p in planned if p.needed):
         ask = f"请为「{item.input.chapter}」这一章写复习讲义。"
@@ -399,7 +410,7 @@ class ChapterView:
 def review_book(library: Library, course: Course) -> list[ChapterView]:
     """整本书的复习讲义：已生成的章节用模型写的要点，没生成的用各讲笔记原文；重要程度和原话都由代码填入。"""
     material = CourseMaterial(library, course)
-    system = build_system_prompt(course)
+    system = course_system_prompt(library, course)
     stored = CourseMemory(library).reviews(course.id)
     reviewed = library.reviewed_names(course.id)
     views = []

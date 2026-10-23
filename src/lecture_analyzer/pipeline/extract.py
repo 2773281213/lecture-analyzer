@@ -99,7 +99,8 @@ def interpretation_block(settings: CourseSettings) -> str:
     ) + "\n"
 
 
-def build_system_prompt(settings: CourseSettings, instructions: str = "") -> str:
+def build_system_prompt(settings: CourseSettings, instructions: str = "", exam_plan: str = "") -> str:
+    """exam_plan 为已确认的考试方案（exam_plans.plan_block 生成，没有方案时为空，提示词不变）。"""
     interpretation = interpretation_block(settings)
     return load_prompt(
         "extract",
@@ -109,6 +110,7 @@ def build_system_prompt(settings: CourseSettings, instructions: str = "") -> str
         term_rule=settings.term_rule,
         interpretation=interpretation,
         instructions=instructions_block(instructions),
+        exam_plan=exam_plan,
     )
 
 
@@ -122,9 +124,10 @@ def extract_lecture(
     starts: Sequence[int] = (),
     instructions: str = "",
     sources: Sequence[str] = (),
+    exam_plan: str = "",
 ) -> ExtractResult:
     """整理一讲的笔记。starts 为各节第一句的下标，用于插入节的分隔和按节分段；sources 为各页课件的出处。"""
-    system = build_system_prompt(settings, instructions)
+    system = build_system_prompt(settings, instructions, exam_plan)
     slides = "## 课件\n" + (render_slides(digests, sources) or NO_SLIDES)
     lines = transcript_lines(segments)
     windows = plan_windows([len(line) + 1 for line in lines], starts, len(system) + len(slides), provider.profile)

@@ -445,3 +445,21 @@ a.cite:hover { color: var(--card); background: var(--accent); }
 a.kp-name, a.kp-link { color: inherit; text-decoration: underline dotted color-mix(in srgb, var(--accent) 60%, transparent); text-underline-offset: 3px; }
 a.kp-name:hover, a.kp-link:hover { color: var(--accent); text-decoration-style: solid; }
 @media print { a.kp-name, a.kp-link { text-decoration: none; } }
+
+/* ---------- 考试方案 ---------- */
+.plan-card .notice { margin: 8px 0 12px; }
+.plan-edit > summary, .plan-reanalyze > summary { cursor: pointer; color: var(--accent); font-weight: 600; padding: 6px 0; }
+.plan-form h3 { margin: 18px 0 6px; font-size: 15px; }
+.plan-table input, .plan-table select { width: 100%; min-width: 0; }
+.plan-table td { padding: 4px 6px; vertical-align: middle; }
+.plan-table td:nth-child(3), .plan-table td:nth-child(4), .plan-table td:nth-child(5) { width: 72px; }
+.plan-table td:nth-child(6) { width: 52px; text-align: right; }
+.plan-table tr.plan-evidence td { padding-top: 0; border-top: none; }
+.plan-list { list-style: none; padding: 0; margin: 0; }
+.plan-list li { margin: 0 0 8px; }
+.plan-list .plan-short { width: 150px; }
+.plan-list .plan-long { width: min(520px, 100%); }
+.plan-list .plan-num { width: 64px; }
+.plan-source { color: var(--muted); font-size: 12px; }
+.plan-source.is-unverified { color: var(--danger); }
+.plan-analyze textarea { width: 100%; }

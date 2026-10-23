@@ -23,7 +23,7 @@
       <a class="pill" href="/reports/{{ report.id }}/markdown">下载 Markdown</a>
       <a class="pill" href="/courses/{{ course.id }}#analysis">返回课程</a>
     </p>
-    <p class="muted small">按可能考到的程度排列，只展开 ★★★ 必考考点，其余折叠在后面。{{ legend }}</p>
+    <p class="muted small">{% if result.groups %}按考试方案的题型分组，组内按可能考到的程度排列；{% else %}按可能考到的程度排列，{% endif %}只展开 ★★★ 必考考点，其余折叠在后面。{{ legend }}</p>
   </header>
 
   {% for warning in result.warnings %}<p class="notice">注意：{{ warning }}</p>{% endfor %}
@@ -31,6 +31,45 @@
   {% if legacy %}
   <p class="notice">这是旧版报告，只保留了考点名称；重新生成可得到知识点要点。</p>
   <ol>{% for row in result.priorities %}<li>{% if row.key %}<a class="kp-link" href="{{ kp_url(course.id, row.key) }}">{{ row.name }}</a>{% else %}{{ row.name }}{% endif %}</li>{% endfor %}</ol>
+  {% elif result.groups %}
+  {# 有考试方案（version 3）：先列题型分值和答题要求，再按题型分组；每组里只展开 ★★★，其余折叠 #}
+  <section class="block plan-summary">
+    <h2 class="report-section">题型与分值（考试方案）{% if result.plan_form %}<span class="muted small"> · {{ result.plan_form }}</span>{% endif %}</h2>
+    <div class="table-wrap"><table class="signals">
+      <thead><tr><th>题型</th><th>分值</th><th>说明</th></tr></thead>
+      <tbody>{% for row in result.plan_table %}<tr><td><a href="#g-{{ loop.index }}">{{ row.name }}</a></td><td>{{ type_brief(row) or "未提及" }}</td><td class="small">{{ row.note }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% if result.answer_rules %}
+    <h3>答题要求</h3>
+    <ul>{% for r in result.answer_rules %}<li>{% if r.type %}<span class="tag">{{ r.type }}</span> {% endif %}{{ r.text }}</li>{% endfor %}</ul>
+    {% endif %}
+  </section>
+  {% for group in result.groups %}
+  {% set row = result.plan_table | selectattr("name", "equalto", group.type) | first %}
+  {% set members = result.points | selectattr("group", "equalto", group.type) | list %}
+  {% set must = members | selectattr("priority", "equalto", 3) | list %}
+  {% set rest = members | rejectattr("priority", "equalto", 3) | list %}
+  <section class="block report-group" id="g-{{ loop.index }}">
+    <h2 class="report-section">{{ group.type }}{% if row and type_brief(row) %}<span class="muted small">（{{ type_brief(row) }}）</span>{% endif %} · {{ members | length }} 个考点</h2>
+    {% for point in must %}{% include "_report_point.html" %}{% endfor %}
+    {% if not members %}<p class="muted">这种题型没有排进前列的考点。</p>{% elif not must %}<p class="muted small">这一组没有 ★★★ 必考考点，候选考点折叠在下面。</p>{% endif %}
+    {% if rest %}
+    <details class="rest-points">
+      <summary>本题型其余 {{ rest | length }} 个考点（★★ 及以下），点开查看</summary>
+      {% for point in rest %}{% include "_report_point.html" %}{% endfor %}
+    </details>
+    {% endif %}
+  </section>
+  {% endfor %}
+  {% if result.excluded %}
+  <details class="rest-points">
+    <summary>{{ result.excluded | length }} 个不考的知识点，点开查看</summary>
+    <section class="block" id="excluded">
+      <h2>不考的知识点</h2>
+      <ul>{% for item in result.excluded %}<li>{% if item.key %}<a class="kp-link" href="{{ kp_url(course.id, item.key) }}">{{ item.name }}</a>{% else %}{{ item.name }}{% endif %}</li>{% endfor %}</ul>
+    </section>
+  </details>
+  {% endif %}
   {% else %}
   {% set must = result.points | selectattr("priority", "equalto", 3) | list %}
   {% set rest = result.points | rejectattr("priority", "equalto", 3) | list %}

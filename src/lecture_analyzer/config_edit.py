@@ -24,8 +24,8 @@ from .config import AppConfig, ConfigError, load_config
 from .credentials import check_name, set_secret
 
 STEP_LABELS = {
-    "page_digest": "课件和资料逐页识别（需要能看图）", "match": "课件匹配到各讲", "extract": "整理笔记",
-    "integrate": "整合课程记忆", "review": "总复习讲义", "material": "资料拆题", "report": "考前报告",
+    "page_digest": "课件和资料逐页识别（需要能看图）", "match": "课件匹配到各讲", "exam_plan": "分析考试方案",
+    "extract": "整理笔记", "integrate": "整合课程记忆", "review": "总复习讲义", "material": "资料拆题", "report": "考前报告",
     "qa_retrieve": "问答：查找相关知识点", "qa": "问答：回答",
 }
 _DEVICE = re.compile(r"^(auto|cpu|cuda(:\d{1,2})?)$")

@@ -1,0 +1,174 @@
+{# 课程页的考试方案卡片（需要 course、all_lectures 和 exam_plan_page.plan_context 的数据） #}
+{% from "_forms.html" import csrf_field %}
+
+{% macro evidence_line(ev) -%}
+{% if ev.source == "lecture" %}
+<span class="plan-source{{ ' is-unverified' if not ev.verified }}">课堂{% if ev.seq %} 第{{ ev.seq }}讲{% endif %}{% if ev.lecture_id and ev.t is not none %} <a class="appear" href="/lectures/{{ ev.lecture_id }}?t={{ ev.t }}">{{ ev.t | ts }}</a>{% endif %}：{% if ev.quote %}「{{ ev.quote }}」{% endif %}{% if not ev.verified %}（原话未核对上，请确认）{% endif %}</span>
+{% elif ev.source == "material" %}
+<span class="plan-source">资料{% if ev.quote %}：「{{ ev.quote }}」{% endif %}</span>
+{% elif ev.quote %}
+<span class="plan-source">考试说明：「{{ ev.quote }}」</span>
+{% else %}
+<span class="plan-source">用户填写</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro type_options(selected) -%}
+{% for key, label in QUESTION_TYPES.items() %}<option value="{{ key }}"{{ " selected" if key == selected }}>{{ label }}</option>{% endfor %}
+{%- endmacro %}
+
+{% macro analyze_form(label) -%}
+<form method="post" action="/courses/{{ course.id }}/exam-plan/analyze" class="form-card plan-analyze">
+  {{ csrf_field() }}
+  <label class="field"><span class="field-label">从哪一讲分析（开课第一讲通常会交代怎么考）</span>
+    <select name="lecture">
+      {% for lecture in all_lectures %}
+      <option value="{{ lecture.id }}"{{ " selected" if lecture.id == exam_plan_source }}>第 {{ lecture.seq }} 讲{% if lecture.title %} {{ lecture.title }}{% endif %}{% if lecture.step_state("transcribe") != "done" %}（还没转写）{% endif %}</option>
+      {% else %}<option value="">（还没有讲）</option>{% endfor %}
+    </select>
+  </label>
+  <label class="field"><span class="field-label">老师的考试说明（可选，最优先采用：例如「闭卷，选择 40 分、名词解释 5×4 分、简答 4×5 分、病例分析 20 分；简答写机制和临床应用」）</span>
+    <textarea name="user_text" rows="4" maxlength="6000">{{ exam_plan_stored.user_text if exam_plan_stored else "" }}</textarea>
+  </label>
+  <p class="form-actions">
+    <button class="button">{{ label }}</button>
+    <span class="muted small">也会参考已导入的考试通知、复习提纲和往年试题的题型；只调用一次模型</span>
+  </p>
+</form>
+{%- endmacro %}
+
+<section class="block plan-card" id="exam-plan">
+  <h2>考试方案 <span class="chip state-{{ {'confirmed': 'done', 'draft': 'failed', 'skipped': 'skipped'}.get(course.exam_plan, 'running') }}">{{ EXAM_PLAN_LABELS[course.exam_plan] }}</span></h2>
+  {% if course.exam_plan == "draft" %}
+  <p class="notice">考试方案已分析好，请核对、修改后点「保存并确认」：确认后才会接着整理笔记，之后的知识点分析、总复习和考前报告都以它为依据。</p>
+  {% elif course.exam_plan == "unset" %}
+  <p class="muted">先弄清这门课怎么考（考核方式、题型分值、老师规定的答题要求），再按它分析知识点。处理到第一讲整理笔记之前会自动分析并停下等你确认；也可以现在就分析，或直接在下面填写。</p>
+  {% elif course.exam_plan == "skipped" %}
+  <p class="muted">已跳过考试方案：后续分析不使用考试方案。可以随时分析或填写，确认后按方案重新整理。</p>
+  {% endif %}
+
+  {% if not exam_plan %}
+  {{ analyze_form("分析考试方案") }}
+  {% endif %}
+
+  {% if exam_plan or course.exam_plan != "skipped" %}
+  <details class="plan-edit"{{ " open" if exam_plan }}>
+    <summary>{{ "核对和修改" if exam_plan else "不分析，直接填写" }}</summary>
+    {% set plan = exam_plan %}
+    <form method="post" action="/courses/{{ course.id }}/exam-plan/save" class="form-card plan-form">
+      {{ csrf_field() }}
+      <div class="field-row">
+        <label class="field"><span class="field-label">考核方式</span>
+          <input name="exam_form" maxlength="60" value="{{ plan.exam_form if plan else '' }}" placeholder="如 闭卷笔试"></label>
+        <label class="field"><span class="field-label">考试时长（分钟）</span>
+          <input name="duration_minutes" inputmode="numeric" value="{{ plan.duration_minutes if plan and plan.duration_minutes else '' }}"></label>
+        <label class="field"><span class="field-label">卷面总分</span>
+          <input name="total_points" inputmode="decimal" value="{{ '%g' | format(plan.total_points) if plan and plan.total_points else '' }}"></label>
+      </div>
+
+      <h3>题型与分值</h3>
+      <div class="table-wrap">
+        <table class="plan-table">
+          <thead><tr><th>题型</th><th>归类</th><th>题数</th><th>每题分值</th><th>合计</th><th>占比</th><th>说明</th></tr></thead>
+          <tbody>
+          {% for t in (plan.question_types if plan else []) %}
+          <tr>
+            <td><input type="hidden" name="qt_ref" value="{{ loop.index0 }}"><input name="qt_name" maxlength="40" value="{{ t.name }}" aria-label="题型"></td>
+            <td><select name="qt_key" aria-label="归类">{{ type_options(t.key) }}</select></td>
+            <td><input name="qt_count" inputmode="numeric" value="{{ t.count or '' }}" aria-label="题数"></td>
+            <td><input name="qt_points" inputmode="decimal" value="{{ '%g' | format(t.points_each) if t.points_each else '' }}" aria-label="每题分值"></td>
+            <td><input name="qt_total" inputmode="decimal" value="{{ '%g' | format(t.total_points) if t.total_points else '' }}" aria-label="合计分值" title="有题数和每题分值时自动计算"></td>
+            <td class="small">{{ '%.0f%%' | format(t.share * 100) if t.share else '—' }}</td>
+            <td><input name="qt_note" maxlength="300" value="{{ t.note }}" aria-label="说明"></td>
+          </tr>
+          <tr class="plan-evidence"><td colspan="7">{{ evidence_line(t.evidence) }}</td></tr>
+          {% endfor %}
+          {% for _ in range(3) %}
+          <tr class="plan-blank">
+            <td><input type="hidden" name="qt_ref" value=""><input name="qt_name" maxlength="40" placeholder="新增题型" aria-label="题型"></td>
+            <td><select name="qt_key" aria-label="归类">{{ type_options("other") }}</select></td>
+            <td><input name="qt_count" inputmode="numeric" aria-label="题数"></td>
+            <td><input name="qt_points" inputmode="decimal" aria-label="每题分值"></td>
+            <td><input name="qt_total" inputmode="decimal" aria-label="合计分值"></td>
+            <td></td>
+            <td><input name="qt_note" maxlength="300" aria-label="说明"></td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="muted small">清空题型名称就删除这一行。有题数和每题分值时合计和占比自动计算{% if plan and plan.types_total %}；现在各题型合计 {{ '%g' | format(plan.types_total) }} 分{% endif %}。</p>
+
+      <h3>答题要求</h3>
+      <ul class="plan-list">
+        {% for r in (plan.answer_rules if plan else []) %}
+        <li><input type="hidden" name="rule_ref" value="{{ loop.index0 }}">
+          <input name="rule_type" maxlength="40" value="{{ r.question_type }}" placeholder="适用题型（可空）" class="plan-short" aria-label="适用题型">
+          <input name="rule_text" maxlength="300" value="{{ r.text }}" class="plan-long" aria-label="答题要求">
+          <br>{{ evidence_line(r.evidence) }}</li>
+        {% endfor %}
+        {% for _ in range(2) %}
+        <li><input type="hidden" name="rule_ref" value="">
+          <input name="rule_type" maxlength="40" placeholder="适用题型（可空）" class="plan-short" aria-label="适用题型">
+          <input name="rule_text" maxlength="300" placeholder="新增答题要求，如「简答题要写出作用机制和临床应用」" class="plan-long" aria-label="答题要求"></li>
+        {% endfor %}
+      </ul>
+
+      <h3>考试范围</h3>
+      <ul class="plan-list">
+        {% for s in (plan.scope if plan else []) %}
+        <li><input type="hidden" name="scope_ref" value="{{ loop.index0 }}">
+          <select name="scope_kind" class="plan-short" aria-label="类型">{% for key, label in SCOPE_LABELS.items() %}<option value="{{ key }}"{{ " selected" if key == s.kind }}>{{ label }}</option>{% endfor %}</select>
+          <input name="scope_text" maxlength="300" value="{{ s.text }}" class="plan-long" aria-label="范围说明">
+          <br>{{ evidence_line(s.evidence) }}</li>
+        {% endfor %}
+        {% for _ in range(2) %}
+        <li><input type="hidden" name="scope_ref" value="">
+          <select name="scope_kind" class="plan-short" aria-label="类型">{% for key, label in SCOPE_LABELS.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select>
+          <input name="scope_text" maxlength="300" placeholder="新增，如「第十四章不考」" class="plan-long" aria-label="范围说明"></li>
+        {% endfor %}
+      </ul>
+
+      <h3>成绩构成</h3>
+      <ul class="plan-list">
+        {% for c in (plan.components if plan else []) %}
+        <li><input type="hidden" name="comp_ref" value="{{ loop.index0 }}">
+          <input name="comp_name" maxlength="40" value="{{ c.name }}" class="plan-short" aria-label="组成部分">
+          <input name="comp_percent" inputmode="decimal" value="{{ '%g' | format(c.percent) if c.percent else '' }}" class="plan-num" aria-label="占比"> %
+          <br>{{ evidence_line(c.evidence) }}</li>
+        {% endfor %}
+        {% for _ in range(2) %}
+        <li><input type="hidden" name="comp_ref" value="">
+          <input name="comp_name" maxlength="40" placeholder="如 期末考试" class="plan-short" aria-label="组成部分">
+          <input name="comp_percent" inputmode="decimal" class="plan-num" aria-label="占比"> %</li>
+        {% endfor %}
+      </ul>
+
+      {% if plan and plan.not_mentioned %}<p class="muted small">老师没有提到：{{ plan.not_mentioned | join("、") }}</p>{% endif %}
+
+      <p class="form-actions">
+        <button class="button" name="action" value="confirm">保存并确认</button>
+        <button class="button button-quiet" name="action" value="save">只保存</button>
+        {% if exam_plan_noted and (course.exam_plan != "confirmed" or exam_plan_changed) %}
+        <span class="muted small">确认后{% if exam_plan_stored and exam_plan_stored.confirmed_fingerprint and not exam_plan_changed %}方案没变时不会重新处理{% else %}将按方案从「整理笔记」起重新处理已整理过的 {{ exam_plan_noted }} 讲（约 {{ exam_plan_noted * 2 }} 次模型调用：整理笔记、整合课程记忆）{% endif %}</span>
+        {% elif exam_plan_noted %}
+        <span class="muted small">修改后再确认，会按新方案重新整理已整理过的 {{ exam_plan_noted }} 讲（约 {{ exam_plan_noted * 2 }} 次调用）</span>
+        {% endif %}
+      </p>
+    </form>
+  </details>
+  {% endif %}
+
+  {% if exam_plan %}
+  <details class="plan-reanalyze">
+    <summary>重新分析</summary>
+    {{ analyze_form("重新分析（覆盖上面的内容）") }}
+  </details>
+  {% endif %}
+
+  {% if course.exam_plan != "skipped" %}
+  <form method="post" action="/courses/{{ course.id }}/exam-plan/skip" class="form-actions" data-confirm="跳过考试方案？后续分析不使用考试方案，可以随时回来分析或填写。">
+    {{ csrf_field() }}<button class="button button-quiet">跳过考试方案</button>
+  </form>
+  {% endif %}
+</section>

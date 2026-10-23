@@ -45,10 +45,13 @@ _UPDATE_COURSE_SQL = {
     "asr": "UPDATE course SET asr = ? WHERE id = ?",
     "instructions": "UPDATE course SET instructions = ? WHERE id = ?",
     "slides": "UPDATE course SET slides = ? WHERE id = ?",
+    "exam_plan": "UPDATE course SET exam_plan = ? WHERE id = ?",
 }
 _SETTINGS_FIELDS = ("subject", "teaching", "interpreted_to", "note_language")
 SLIDES_LABELS = {"unset": "未选择", "none": "不提供", "provided": "已提供"}  # 分析前必须先选择是否提供课件
 SLIDES_CHOICES = tuple(SLIDES_LABELS)
+# 考试方案：整理笔记前必须已确认或已跳过（方案关卡，见 pipeline/exam_plan.py）
+EXAM_PLAN_LABELS = {"unset": "未设置", "draft": "待确认", "confirmed": "已确认", "skipped": "已跳过"}
 _PARTS_OF_LECTURE = "SELECT * FROM lecture_part WHERE lecture_id = ? ORDER BY part"
 _PARTS_OF_COURSE = (
     "SELECT p.* FROM lecture_part p JOIN lecture l ON l.id = p.lecture_id WHERE l.course_id = ?"
@@ -70,6 +73,7 @@ class Course:
     instructions: str = ""  # 用户对这门课的补充要求（课程提示词）
     position: int = 0  # 书架上的自定义顺序
     slides: str = "unset"  # 是否提供课件：unset 还没选择 / none 不提供 / provided 已提供
+    exam_plan: str = "unset"  # 考试方案：unset 未设置 / draft 待确认 / confirmed 已确认 / skipped 已跳过
 
 
 @dataclass(frozen=True)
@@ -205,6 +209,8 @@ class Library:
             fields["instructions"] = clean_instructions(fields["instructions"])
         if fields.get("slides", "unset") not in SLIDES_CHOICES:
             raise LibraryError(f"课件选择只能是 {', '.join(SLIDES_CHOICES)}")
+        if fields.get("exam_plan", "unset") not in EXAM_PLAN_LABELS:
+            raise LibraryError(f"考试方案状态只能是 {', '.join(EXAM_PLAN_LABELS)}")
         if set(fields) & set(_SETTINGS_FIELDS):  # 语言等设置合在一起校验，并换算成规范写法
             current = self.course_by_id(course_id).settings.model_dump()
             try:
@@ -531,6 +537,7 @@ def _course(row: sqlite3.Row) -> Course:
     return Course(
         id=row["id"], name=row["name"], settings=settings, asr=row["asr"],
         instructions=row["instructions"], position=row["position"], slides=row["slides"],
+        exam_plan=row["exam_plan"],
     )
 
 

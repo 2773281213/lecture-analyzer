@@ -5,13 +5,14 @@ v2（M2）：一讲可有多个文件（节）、讲的标签、课程提示词�
 v3（M3）：授课语言通用化（现场翻译单独一列）、课件选择、课程资料库（课件、教材、试题……）、
           每讲对应的课件页（取代 v1 每讲一份课件的 slides_path）、笔记所用课件页的快照、考前报告、后台任务。
 v4（M4）：问答（按课程的连续对话，可以限定某一讲）；考点信号的原话附笔记语言的意思（外语授课的课程）。
+v5：考试方案（考核方式、题型分值、答题要求、考试范围），课程上记录方案状态（未设置 / 待确认 / 已确认 / 已跳过）。
 """
 
 from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _V1 = """
 BEGIN;
@@ -261,7 +262,25 @@ PRAGMA user_version = 4;
 COMMIT;
 """
 
-MIGRATIONS = {1: _V1, 2: _V2, 3: _V3, 4: _V4}
+_V5 = """
+BEGIN;
+ALTER TABLE course ADD COLUMN exam_plan TEXT NOT NULL DEFAULT 'unset';
+CREATE TABLE exam_plan (
+    course_id INTEGER PRIMARY KEY REFERENCES course(id) ON DELETE CASCADE,
+    source_lecture_id INTEGER REFERENCES lecture(id) ON DELETE SET NULL,
+    user_text TEXT NOT NULL DEFAULT '',
+    result_json TEXT NOT NULL DEFAULT '',
+    confirmed_fingerprint TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    confirmed_at TEXT NOT NULL DEFAULT ''
+);
+PRAGMA user_version = 5;
+COMMIT;
+"""
+
+MIGRATIONS = {1: _V1, 2: _V2, 3: _V3, 4: _V4, 5: _V5}
 
 
 def migrate(conn: sqlite3.Connection, backup_path_for: dict[int, str] | None = None) -> int:

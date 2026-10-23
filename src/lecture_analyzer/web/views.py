@@ -22,6 +22,7 @@ from ..reports import ReportStore
 from ..render import RELATION_LABELS, ROLE_LABELS, SIGNAL_LABELS, first_time, group_by_chapter, signal_stats
 from ..schemas import LectureNotes
 from ..textnorm import normalize_zh
+from .exam_plan_page import plan_context
 
 # 书脊颜色：按课程编号轮换，和样式表里的配色一致
 SPINE_COLORS = ("#2f6f62", "#9a4a37", "#3d5a80", "#7a5c2e", "#5b4b8a", "#4f6d3a")
@@ -142,6 +143,7 @@ def course_view(library: Library, course: Course, tag: str | None, cfg: AppConfi
         "chapters": chapters,
         "total_ms": sum(lecture.duration_ms or 0 for lecture in lectures),
         **progress([row for _, rows in chapters for row in rows]),
+        **plan_context(library, course),
     }
 
 

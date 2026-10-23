@@ -21,6 +21,7 @@ fallback = "auto"              # 换型号、对半切之后仍被拦截的片�
 [steps]
 page_digest = "gemini"         # 课件/资料页面识别，需要能看图的模型
 match = "gemini"               # 把课件页匹配到各讲（不写时与 page_digest 相同）
+# exam_plan = "claude"         # 分析考试方案（不写时与 extract 相同）
 extract = "claude"             # 单讲整理笔记
 integrate = "claude"           # 跨讲整合（课程记忆）
 review = "claude"              # 总复习讲义
@@ -33,6 +34,7 @@ qa = "claude"                  # 问答：依据笔记、转写和资料回答
 [effort]
 page_digest = "low"
 match = "low"
+exam_plan = "medium"
 extract = "medium"
 integrate = "medium"
 review = "medium"
@@ -52,13 +54,21 @@ review_budget = 60000          # 总复习每章的输入上限
 digest_workers = 4             # 同时发出的识别请求数；中转站限流时调小
 digest_batch = 6               # 每次请求识别几页
 
+# 考试方案：先弄清这门课怎么考（考核方式、题型分值、答题要求、考试范围），确认后再按它整理笔记、写总复习和考前分析。
+# 第一讲转写完会自动分析，然后停在整理笔记之前，等你在课程页核对、确认（也可以填写老师的考试说明，或跳过）
+[exam_plan]
+auto_confirm = false           # true：分析出来直接采用，不停下来等确认
+lead_minutes = 40              # 来源讲的转写只送开头这么多分钟……
+window_minutes = 2             # ……再加上提到考试、题型、分值等关键词的句子前后各这么多分钟
+
 # 考前报告
 [report]
-top_n = 15                     # 每个模型排出前几个考点
+top_n = 15                     # 每个模型排出前几个考点（有考试方案时按各题型的题数自动放大，最多 40 个）
 
 # 考点打分的权重（报告里会显示每个考点的分数构成）。只写要改的项，没写的用默认值，例如：
 # [scoring]
 # review_lecture = 3           # 在复习课里出现的加分
+# question_type_fit = 6        # 题型匹配：× 知识点适合的各题型在考试方案里的分值占比之和（最多算 1）
 # [scoring.signals]            # 课堂信号：权重 × 强度。默认：提示考试 exam_hint 5、考试范围 scope_include 4、
 # exam_hint = 6                #   强调 emphasis 3、易错 common_mistake 2、例题/推导/作业 2、回顾 1、课件外补充 1、跳过的课件页 -1
 # [scoring.materials]          # 资料题目：权重 × 分值系数。默认：往年真题 past_exam 5、模拟题 mock_exam 4、

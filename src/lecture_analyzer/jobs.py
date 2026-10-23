@@ -30,6 +30,7 @@ class JobKind:
 JOB_KINDS: dict[str, JobKind] = {
     "run": JobKind("处理讲", "heavy"),
     "rebuild": JobKind("重建课程记忆", "heavy"),
+    "exam_plan": JobKind("分析考试方案", "heavy"),  # 与处理讲排在同一队列：要读处理讲刚写好的转写
     "import_material": JobKind("导入资料", "heavy"),
     "process_material": JobKind("处理资料", "heavy"),
     "download_models": JobKind("下载本地模型", "heavy"),

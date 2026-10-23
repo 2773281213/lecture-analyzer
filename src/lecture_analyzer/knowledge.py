@@ -132,6 +132,14 @@ class LectureCache:
         """这些句子里第一句的开始时间（毫秒）。"""
         return first_time(segment_ids, self.segments(lecture_id))
 
+    def kp_question_types(self, kp: KnowledgePoint) -> list[str]:
+        """课程知识点适合的题型：合并它在各讲笔记里标注的题型（按考试方案整理的笔记才有），按出现顺序去重。"""
+        types: list[str] = []
+        for appearance in kp.appearances:
+            note = self.note_kp(appearance.lecture_id, appearance.note_index)
+            types += note.question_types if note else []
+        return list(dict.fromkeys(t.strip() for t in types if t.strip()))
+
     def note_kp(self, lecture_id: int, note_index: int | None) -> KnowledgePointNote | None:
         """某讲笔记中第 note_index 个知识点。"""
         notes = self.notes(lecture_id)

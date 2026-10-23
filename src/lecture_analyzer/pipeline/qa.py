@@ -18,6 +18,7 @@ from typing import Any
 from ..asr.base import Segment
 from ..config import AppConfig
 from ..conversations import QATurn
+from ..exam_plans import ExamPlanStore, plan_block
 from ..knowledge import CourseMemory, KnowledgePoint, LectureCache
 from ..library import Course, Lecture, Library, LibraryError
 from ..llm import TextPart, create_provider
@@ -297,4 +298,5 @@ def _prompt(ctx: QAContext, name: str) -> str:
     settings = ctx.course.settings
     return load_prompt(name, subject=settings.subject or ctx.course.name, teaching=settings.teaching_description,
                        note_language=settings.note_language_name, term_rule=settings.term_rule,
-                       instructions=instructions_block(ctx.course.instructions))
+                       instructions=instructions_block(ctx.course.instructions),
+                       exam_plan=plan_block(ExamPlanStore(ctx.library).active(ctx.course), "qa"))

@@ -14,6 +14,7 @@
     <p class="head-actions">
       <a class="button" href="/courses/{{ course.id }}/review">总复习</a>
       <a class="button" href="/courses/{{ course.id }}/qa">提问</a>
+      <a class="pill" href="#exam-plan">考试方案</a>
       <a class="pill" href="#add-lecture">添加一讲</a>
       <a class="pill" href="#analysis">考前分析</a>
       <a class="pill" href="#materials">课程资料</a>
@@ -50,6 +51,8 @@
     </form>
   </div>
   {% endif %}
+
+  {% include "_exam_plan.html" %}
 
   <section class="block" id="chapters">
     <h2>目录</h2>
