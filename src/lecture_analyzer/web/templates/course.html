@@ -198,29 +198,24 @@
     {% if not chapters %}
     <p class="muted">课程记忆还没有建立：处理完至少一讲后会自动整合。</p>
     {% endif %}
+    {% if chapters %}<p class="muted small">只展开 ★★★ 必考知识点（老师提示考试或明确划重点，或出现在真题、模拟题、复习提纲里），其余折叠在每章末尾。</p>{% endif %}
     {% for chapter, rows in chapters %}
+    {% set must = rows | selectattr("priority", "equalto", 3) | list %}
+    {% set rest = rows | rejectattr("priority", "equalto", 3) | list %}
     <h3 class="chapter-name">{{ chapter }}</h3>
+    {% if must %}
     <ul class="kp-list">
-      {% for row in rows %}
-      <li id="k-{{ row.kp.key }}" class="kp-row{{ ' is-reviewed' if row.reviewed }}">
-        {% with back = "course", toggle_name = row.norm_name, toggle_key = row.kp.key, toggle_reviewed = row.reviewed %}
-        {% include "_review_toggle.html" %}
-        {% endwith %}
-        <div class="kp-main">
-          <span class="kp-name">{{ row.kp.name }}</span>
-          {% include "_priority.html" %}
-          {% set shown_aliases = row.kp.aliases | zh_aliases %}
-          {% if shown_aliases %}<span class="muted">（{{ shown_aliases | join("、") }}）</span>{% endif %}
-          <div class="kp-meta">
-            {% for a in row.appearances %}
-            <a class="appear" href="/lectures/{{ a.lecture_id }}{% if a.t is not none %}?t={{ a.t }}{% endif %}">第{{ a.seq }}讲·{{ a.role }}</a>
-            {% endfor %}
-            {% for label, count in row.signals %}<span class="sig">{{ label }} {{ count }}</span>{% endfor %}
-          </div>
-        </div>
-      </li>
-      {% endfor %}
+      {% for row in must %}{% include "_kp_row.html" %}{% endfor %}
     </ul>
+    {% endif %}
+    {% if rest %}
+    <details class="rest-points">
+      <summary>{% if must %}本章其余 {{ rest | length }} 个知识点（★★ 及以下）{% else %}本章没有必考知识点：{{ rest | length }} 个知识点（★★ 及以下）{% endif %}，点开查看</summary>
+      <ul class="kp-list">
+        {% for row in rest %}{% include "_kp_row.html" %}{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
     {% endfor %}
   </section>
 </main>

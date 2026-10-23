@@ -1,0 +1,18 @@
+{# 课程页知识点体系的一行（需要 row；折叠区和展开区共用） #}
+<li id="k-{{ row.kp.key }}" class="kp-row{{ ' is-reviewed' if row.reviewed }}">
+  {% with back = "course", toggle_name = row.norm_name, toggle_key = row.kp.key, toggle_reviewed = row.reviewed %}
+  {% include "_review_toggle.html" %}
+  {% endwith %}
+  <div class="kp-main">
+    <span class="kp-name">{{ row.kp.name }}</span>
+    {% include "_priority.html" %}
+    {% set shown_aliases = row.kp.aliases | zh_aliases %}
+    {% if shown_aliases %}<span class="muted">（{{ shown_aliases | join("、") }}）</span>{% endif %}
+    <div class="kp-meta">
+      {% for a in row.appearances %}
+      <a class="appear" href="/lectures/{{ a.lecture_id }}{% if a.t is not none %}?t={{ a.t }}{% endif %}">第{{ a.seq }}讲·{{ a.role }}</a>
+      {% endfor %}
+      {% for label, count in row.signals %}<span class="sig">{{ label }} {{ count }}</span>{% endfor %}
+    </div>
+  </div>
+</li>

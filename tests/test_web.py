@@ -210,3 +210,28 @@ def test_review_shows_must_points_and_folds_the_rest(m1_env, monkeypatch):
     assert "其余 1 个知识点（★★ 及以下" in page and 'class="toc-rest"><a href="#k-99"' in page
     focus = _processed_client(m1_env).get(f"/courses/{m1_env.course_id}/review?focus=1").text
     assert "肝药酶诱导" not in focus and "rest-points" not in focus  # 「只看重点」照旧只显示 ★★★
+
+
+def test_course_knowledge_shows_must_points_and_folds_the_rest(m1_env, monkeypatch):
+    """课程页的知识点体系每章只展开 ★★★ 必考知识点，其余折叠；整章没有必考知识点时也只显示折叠区。"""
+    from dataclasses import replace
+
+    from lecture_analyzer.web import views
+
+    real = views._kp_chapters
+
+    def with_minor_points(library, course):
+        chapters = real(library, course)
+        name, rows = chapters[0]
+        first = rows[0]
+        minor = replace(first, kp=replace(first.kp, key=99, name="肝药酶诱导"), priority=1)
+        other = replace(first, kp=replace(first.kp, key=98, name="药物相互作用概述"), priority=2)
+        return [(name, [*rows, minor]), ("附：其他", [other]), *chapters[1:]]
+
+    monkeypatch.setattr(views, "_kp_chapters", with_minor_points)
+    page = _processed_client(m1_env).get(f"/courses/{m1_env.course_id}").text
+    folded = page.index('<details class="rest-points">')
+    assert page.index('id="k-1"') < folded < page.index('id="k-99"')
+    assert "本章其余 1 个知识点（★★ 及以下）" in page
+    assert "本章没有必考知识点：1 个知识点（★★ 及以下）" in page
+    assert page.rindex('<details class="rest-points">') < page.index('id="k-98"')
