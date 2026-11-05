@@ -46,6 +46,15 @@
 {% endif %}
 {%- endmacro %}
 
+{# 还没就绪的模型档案（没填型号或缺少密钥）：用到它的步骤会失败，在提交任务的页面先提示。unready：[(档案名, [步骤])] #}
+{% macro models_notice(unready) -%}
+{% if unready %}
+<div class="notice">
+  <p>{% for name, steps in unready %}模型档案「{{ name }}」还没就绪（没填型号或缺少密钥），用到它的步骤：{{ steps | join("、") }}。{% endfor %}处理到这些步骤时任务会失败（之前的步骤会保留），请先到<a href="/settings#models">设置页</a>填写，再「测试连接」。</p>
+</div>
+{% endif %}
+{%- endmacro %}
+
 {# 任务状态的样式名 #}
 {% macro state_chip(state) -%}
 <span class="chip state-{{ {'done': 'done', 'failed': 'failed', 'cancelled': 'skipped', 'paused': 'skipped'}.get(state, 'running') }}">{{ JOB_STATES.get(state, state) }}</span>

@@ -8,12 +8,14 @@
 - 暂停：排队中或进行中 → 已暂停（进行中的子进程被结束，之后写回的进度和结果同样不生效）；
   继续：已暂停 → 排队中，按原来的编号排队，已完成的步骤、已识别的页不重做；
 - 重试：失败或已取消的任务按同样的参数重新提交一个新任务（旧任务留在列表里，看得出失败原因）；
-- 应用启动时，上次没执行完的任务（应用被关闭）标为失败；已暂停的任务保持暂停。
+- 清理：删除失败和已取消的任务记录（只是任务记录：已处理好的内容、已完成的步骤都不在任务表里，不受影响）；
+- 书架关闭（或上次意外退出）时没做完的任务标为已暂停，打开后点「继续」接着做；已暂停的任务保持暂停。
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -44,7 +46,7 @@ FINISHED_STATES = ("done", "failed", "cancelled")
 RETRYABLE_STATES = ("failed", "cancelled")
 STATE_LABELS = {"queued": "排队中", "running": "进行中", "paused": "已暂停", "done": "完成", "failed": "失败",
                 "cancelled": "已取消"}
-INTERRUPTED = "书架程序在任务完成前被关闭，请重新提交（已完成的步骤不会重做）"
+INTERRUPTED = "书架程序关闭时还没做完，已暂停：点「继续」接着做（已完成的步骤不会重做）"
 MAX_PROGRESS_CHARS = 500
 
 
@@ -144,10 +146,13 @@ class JobStore:
         return self._change("UPDATE job SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'paused'",
                             (_now(), job_id))
 
-    def fail_interrupted(self) -> int:
-        """把上次没执行完的任务标为失败（应用重启后它们不会再继续）。"""
+    def pause_interrupted(self) -> int:
+        """书架关闭（或上次意外退出）时没做完的任务：排队中、进行中 → 已暂停，进度说明写明原因，返回几个。
+
+        不标为失败：打开书架后点「全部继续」按原来的编号接着做，不必重新提交、也不留下一串失败的记录；
+        也不自动继续：关掉书架可能就是想让显卡或模型额度停下来。"""
         cursor = self.conn.execute(
-            "UPDATE job SET state = 'failed', error = ?, updated_at = ? WHERE state IN ('queued', 'running')",
+            "UPDATE job SET state = 'paused', progress = ?, updated_at = ? WHERE state IN ('queued', 'running')",
             (INTERRUPTED, _now()),
         )
         self.conn.commit()
@@ -169,10 +174,10 @@ class JobStore:
         rows = self.conn.execute("SELECT * FROM job WHERE course_id = ? AND kind = ? ORDER BY id", (course.id, kind))
         return [_job(row) for row in rows]
 
-    def latest(self, limit: int = 50) -> list[Job]:
-        """所有任务，最新的在前（任务页）。"""
-        rows = self.conn.execute("SELECT * FROM job ORDER BY id DESC LIMIT ?", (limit,))
-        return [_job(row) for row in rows]
+    def latest(self, limit: int | None = None) -> list[Job]:
+        """任务，最新的在前：不给 limit 时为全部（任务页），给了只取最新的几个。"""
+        rows = self.conn.execute("SELECT * FROM job ORDER BY id DESC LIMIT ?", (-1 if limit is None else limit,))
+        return [_job(row) for row in rows]  # SQLite 的 LIMIT -1 表示不限
 
     def active(self, course: Course | None, kind: str, params: dict[str, Any]) -> Job | None:
         """同一门课、同一类型、同样参数、还没结束的任务（避免重复提交）。"""
@@ -195,6 +200,18 @@ class JobStore:
             " AND state IN ('failed', 'cancelled') ORDER BY id")
         return [_job(row) for row in rows]
 
+    def failed_jobs(self) -> list[Job]:
+        """失败或已取消的任务（「清理失败」要删除的），按提交顺序。"""
+        rows = self.conn.execute("SELECT * FROM job WHERE state IN ('failed', 'cancelled') ORDER BY id")
+        return [_job(row) for row in rows]
+
+    def remove(self, job_ids: Sequence[int]) -> int:
+        """删除这些任务里失败或已取消的记录（其他状态的不删），返回删除了几个。"""
+        cursor = self.conn.executemany("DELETE FROM job WHERE id = ? AND state IN ('failed', 'cancelled')",
+                                       [(job_id,) for job_id in job_ids])
+        self.conn.commit()
+        return max(cursor.rowcount, 0)
+
     def active_jobs(self, course: Course | None = None) -> list[Job]:
         """还没结束的任务（不给课程时为全部）。"""
         if course is None:
@@ -211,14 +228,20 @@ class JobStore:
                     None)
 
 
-def ensure_idle(library: Library, course: Course, action: str) -> None:
-    """删除、移动之前：这门课不能有还没结束的任务（任务进程正在读写这些数据；暂停的任务继续后也会读写）。"""
+def unfinished_jobs(library: Library, course: Course) -> list[Job]:
+    """这门课还没结束的任务：排队中、进行中和已暂停的（暂停的任务继续后也会读写这门课的数据），按编号。"""
     store = JobStore(library)
     jobs = store.active_jobs(course) + [job for job in store.paused_jobs() if job.course_id == course.id]
+    return sorted(jobs, key=lambda job: job.id)
+
+
+def ensure_idle(library: Library, course: Course, action: str) -> None:
+    """删除、移动之前：这门课不能有还没结束的任务（任务进程正在读写这些数据）。"""
+    jobs = unfinished_jobs(library, course)
     if jobs:
-        names = "、".join(f"#{job.id} {job.label}" for job in sorted(jobs, key=lambda job: job.id)[:3])
+        names = "、".join(f"#{job.id} {job.label}" for job in jobs[:3])
         raise LibraryError(f"「{course.name}」还有没结束的后台任务（{names}），请等它们完成或取消后再{action}"
-                           "（书架程序意外关闭留下的任务，重新打开一次书架就会清掉）")
+                           "（书架关闭时没做完的任务会变成已暂停，在「后台任务」里继续或取消即可）")
 
 
 def _job(row: Any) -> Job:

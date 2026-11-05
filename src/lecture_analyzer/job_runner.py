@@ -8,7 +8,10 @@
 - 暂停与取消一样结束子进程，只是标为已暂停；继续时改回排队中并唤醒队列，已完成的步骤不重做；
 - 子进程没写结果就退出（崩溃、被结束）时标为失败，失败原因附上日志的最后几行；
   日志在 data/work/jobs/，只保留失败的任务的；
-- 关闭书架时结束所有子进程，任务标为失败；重新提交会接着做（已完成的步骤、已识别的页不重做）；
+- 关闭书架时结束所有子进程，没做完的任务（含排队中的）标为已暂停；书架意外退出的，下次启动时同样标为已暂停。
+  打开书架后点「全部继续」接着做（已完成的步骤、已识别的页不重做）；
+- 清理失败：删除失败和已取消的任务记录及其日志；刚取消、进程还在结束中的这次不删；
+  任务记录在别的书架程序里被清理掉时，子进程退出后照常收尾（只删日志）；
 - 同一个书库同一时间只有一个执行器（锁文件 data/work/jobs/runner.lock，进程退出时系统自动释放）：
   例如开着桌面程序又运行 `lec serve`，后打开的只提交任务，由先打开的执行，也不会把先打开的那个正在执行的任务
   当成上次没执行完的；在后打开的书架里取消任务（只改任务表），执行器两秒内发现并结束进程。
@@ -27,8 +30,8 @@ from pathlib import Path
 from typing import IO
 
 from .config import AppConfig
-from .jobs import INTERRUPTED, LANES, JobStore
-from .library import Library
+from .jobs import LANES, JobStore
+from .library import Library, LibraryError
 
 POLL_SECONDS = 2.0  # 队列线程没被唤醒时，隔这么久查一次任务表
 CANCEL_POLL_SECONDS = 2.0  # 任务运行期间隔这么久看一次是否在别处被取消
@@ -132,13 +135,13 @@ class JobRunner:
         self.owner = False  # 是否由本进程执行这个书库的任务
 
     def start(self) -> None:
-        """成为这个书库的执行器：先把上次没执行完的任务标为失败，再启动两条队列。
+        """成为这个书库的执行器：先把上次没执行完的任务标为已暂停，再启动两条队列。
         别的书架程序已经在执行这个书库的任务时，本进程只提交任务。"""
         if self.owner or not self._owner_lock.acquire():
             return
         self.owner = True
         with Library(self.db_path) as library:
-            JobStore(library).fail_interrupted()
+            JobStore(library).pause_interrupted()
         self._threads = [threading.Thread(target=self._loop, args=(lane,), name=f"lec-jobs-{lane}", daemon=True)
                          for lane in LANES]
         for thread in self._threads:
@@ -192,21 +195,34 @@ class JobRunner:
             jobs = JobStore(library).paused_jobs()
         return sum(self.resume(job.id) for job in jobs)
 
+    def clear_failed(self) -> int:
+        """删除失败和已取消的任务记录及其日志，返回删除了几个。
+
+        刚取消、子进程还在结束中的任务这次不删（收尾时要读它的状态），下次再清理。"""
+        with self._lock, Library(self.db_path) as library:
+            store = JobStore(library)
+            ids = [job.id for job in store.failed_jobs() if job.id not in self._processes]
+            removed = store.remove(ids)
+        for job_id in ids:
+            with suppress(OSError):  # Windows：日志还被别的进程占用时删不掉，留给那边收尾
+                log_path(self.cfg.data_dir, job_id).unlink(missing_ok=True)
+        return removed
+
     def running(self) -> list[int]:
         with self._lock:
             return list(self._processes)
 
     def shutdown(self) -> None:
-        """关闭书架：不再取新任务，结束正在运行的子进程（任务标为失败）。"""
+        """关闭书架：不再取新任务，没做完的任务标为已暂停，结束正在运行的子进程。
+        只提交任务、不执行的书架程序关闭时不动任务表（任务由别的书架程序执行）。"""
         self._stop.set()
         for event in self._wake.values():
             event.set()
         with self._lock:
             processes = dict(self._processes)
-            if processes:
+            if self.owner:  # 先改状态再结束进程：收尾时看到已暂停，不会标为失败
                 with Library(self.db_path) as library:
-                    for job_id in processes:
-                        JobStore(library).fail(job_id, INTERRUPTED)
+                    JobStore(library).pause_interrupted()
         for process in processes.values():
             kill_tree(process)
         self._owner_lock.release()
@@ -240,9 +256,11 @@ class JobRunner:
             if process is None:
                 return
             code = self._wait(job_id, process)
-        with self._lock:
-            self._processes.pop(job_id, None)
-        self._settle(job_id, code, log)
+        try:
+            self._settle(job_id, code, log)
+        finally:  # 收尾之后才移出：清理失败时不会删掉还在收尾的任务，running() 为空时状态都已写好
+            with self._lock:
+                self._processes.pop(job_id, None)
 
     def _launch(self, job_id: int, output: IO[bytes]) -> subprocess.Popen[bytes] | None:
         """标为进行中并启动子进程；任务已被取消、书架正在关闭时返回 None。"""
@@ -276,8 +294,11 @@ class JobRunner:
         """子进程退出后：没写结果的（崩溃、被结束）标为失败；只保留失败任务的日志。"""
         with Library(self.db_path) as library:
             store = JobStore(library)
-            if store.get(job_id).state == "running":
-                store.fail(job_id, f"任务进程意外退出（退出码 {code}）{_tail(log)}")
-            state = store.get(job_id).state
+            try:
+                if store.get(job_id).state == "running":
+                    store.fail(job_id, f"任务进程意外退出（退出码 {code}）{_tail(log)}")
+                state = store.get(job_id).state
+            except LibraryError:  # 任务记录已在别的书架程序里被清理
+                state = ""
         if state != "failed":
             log.unlink(missing_ok=True)

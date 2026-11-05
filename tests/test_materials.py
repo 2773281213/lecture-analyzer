@@ -258,6 +258,39 @@ def test_failed_import_is_rolled_back(library: Library, tmp_path: Path):
     assert not any((tmp_path / "data" / "materials").glob("*"))
 
 
+def test_reimport_reuses_finished_and_replaces_broken(library: Library, tmp_path: Path):
+    """继续或重试被中断的导入：已导入的沿用，中断留下的残缺资料删掉重导，内容改过的文件当作新资料。"""
+    data_dir = tmp_path / "data"
+    quiet = lambda _: None  # noqa: E731
+    course = library.add_course("药理学", CourseSettings())
+    lecture = library.add_lecture(course, 1, [tmp_path / "a.mp4"])
+    folder = tmp_path / "课件"
+    first, second = _pdf(folder / "第一章.pdf", 2), _pdf(folder / "第二章.pdf", 3)
+    kept = ingest.import_materials(library, data_dir, course, [first], "slides", report=quiet).materials[0]
+    store = MaterialStore(library)
+    broken = store.add(course, "slides", "第二章", str(second))  # 拆页时进程被结束：只登记了资料，没拆页
+    messages: list[str] = []
+    again = ingest.import_materials(library, data_dir, course, [folder], "slides", report=messages.append)
+    assert again.reused == 1 and again.materials[0].id == kept.id and "「第一章」之前已导入" in messages[0]
+    redone = again.materials[1]  # 编号可能和删掉的残缺资料相同（SQLite 复用最大的编号），按内容判断
+    assert redone.page_count == 3 and redone.step_state("pages") == "done" and broken.page_count == 0
+    assert [m.id for m in store.list(course)] == [kept.id, redone.id]  # 没有重复，残缺的已删除
+
+    library.set_step(lecture.id, "slides", "done")
+    same = ingest.import_materials(library, data_dir, course, [first, second], "slides", report=quiet)
+    assert same.reused == 2 and len(store.list(course)) == 2
+    assert library.lecture_by_id(lecture.id).step_state("slides") == "done"  # 课件没变，不用重新匹配
+
+    _pdf(first, 4, text="修订版")  # 同一位置的文件改过了：当作新资料，原来那份保留
+    changed = ingest.import_materials(library, data_dir, course, [first], "slides", report=quiet)
+    assert changed.reused == 0 and changed.materials[0].page_count == 4 and len(store.list(course)) == 3
+
+    other = library.add_course("病毒学", CourseSettings())  # 唯一的课件是残缺的：删掉重导后仍算已提供课件
+    store.add(other, "slides", "第二章", str(second))
+    ingest.import_materials(library, data_dir, other, [second], "slides", report=quiet)
+    assert library.course_by_id(other.id).slides == "provided" and len(store.list(other)) == 1
+
+
 def test_pin_lecture_pages(library: Library, tmp_path: Path):
     course = library.add_course("药理学", CourseSettings())
     lecture = library.add_lecture(course, 3, [tmp_path / "a.mp4"])

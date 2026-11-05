@@ -60,8 +60,13 @@ def test_job_states_only_move_forward(tmp_path):
             delete_course(library, tmp_path, course)
         with pytest.raises(LibraryError, match="未知的任务类型"):
             store.add(course, "everything", {})
-        assert store.fail_interrupted() == 2 and store.active_jobs() == []
-        assert "被关闭" in store.get(light.id).error
+        assert store.pause_interrupted() == 2 and store.active_jobs() == []  # 书架关闭时没做完的：已暂停
+        job = store.get(light.id)
+        assert job.state == "paused" and "关闭" in job.progress and job.error == ""
+        with pytest.raises(LibraryError, match="还有没结束的后台任务"):
+            ensure_idle(library, course, "删除课程")  # 暂停的任务仍算没结束
+        for job in store.paused_jobs():
+            store.cancel(job.id)
         ensure_idle(library, course, "删除课程")
 
 
@@ -83,7 +88,7 @@ def test_pause_resume_and_retry_candidates(tmp_path):
         assert [j.id for j in store.paused_jobs()] == [queued.id, running.id]
         with pytest.raises(LibraryError, match="还有没结束的后台任务"):
             ensure_idle(library, course, "删除课程")
-        assert store.fail_interrupted() == 0 and store.get(queued.id).state == "paused"  # 重启后保持暂停
+        assert store.pause_interrupted() == 0 and store.get(queued.id).state == "paused"  # 重启后保持暂停
         assert store.resume(running.id) and not store.resume(running.id)
         assert store.next_queued("heavy").id == running.id  # 按原来的编号排队
         assert store.cancel(queued.id)  # 暂停的任务也可以取消
@@ -100,6 +105,42 @@ def test_pause_resume_and_retry_candidates(tmp_path):
         store.fail(models.id, "网络错误")
         assert [j.id for j in store.retry_candidates()] == [queued.id, newer.id, models.id]
         assert store.get(newer.id).retryable and not store.get(running.id).retryable
+
+
+def test_clear_failed_records_and_unlimited_list(tmp_path):
+    """清理只删失败和已取消的任务记录；任务页的列表不限条数。"""
+    with Library(tmp_path / "lecture.db") as library:
+        course = library.add_course("病毒学", CourseSettings())
+        store = JobStore(library)
+        jobs = [store.add(course, "run", {"lectures": [n]}) for n in range(1, 61)]
+        assert len(store.latest()) == 60 and [j.id for j in store.latest(2)] == [jobs[-1].id, jobs[-2].id]
+        failed, cancelled, paused, done = jobs[:4]
+        store.fail(failed.id, "缺少密钥")
+        store.cancel(cancelled.id)
+        store.pause(paused.id)
+        store.start(done.id)
+        store.finish(done.id, {})
+        assert [j.id for j in store.failed_jobs()] == [failed.id, cancelled.id]
+        assert store.remove([failed.id, cancelled.id, paused.id, done.id, jobs[4].id]) == 2  # 其他状态的不删
+        assert store.failed_jobs() == [] and store.retry_candidates() == [] and len(store.latest()) == 58
+        with pytest.raises(LibraryError, match="没有编号为"):
+            store.get(failed.id)
+
+
+def test_settle_after_job_was_cleared_elsewhere(example_config: Path):
+    """任务记录在别的书架程序里被清理掉：子进程退出后照常收尾，删掉日志，不报错。"""
+    cfg = load_config(example_config)
+    db = cfg.data_dir / "lecture.db"
+    with Library(db) as library:
+        store = JobStore(library)
+        job = store.add(library.add_course("病毒学", CourseSettings()), "run", {})
+        store.cancel(job.id)
+        assert store.remove([job.id]) == 1
+    log = log_path(cfg.data_dir, job.id)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("任务输出", encoding="utf-8")
+    JobRunner(cfg, db)._settle(job.id, 1, log)  # 不启动队列，只做收尾
+    assert not log.exists()
 
 
 # ---------- 子进程执行器 ----------
@@ -177,12 +218,16 @@ def test_crashed_worker_is_marked_failed_with_log_tail(runner_env):
     assert wait_for(lambda: _finished(runner_env, failed)).error == "模拟失败"
 
 
-def test_shutdown_stops_running_jobs(runner_env):
+def test_shutdown_pauses_unfinished_jobs(runner_env):
+    """关闭书架：结束子进程，进行中和排队中的任务都标为已暂停（下次打开点「继续」），不标为失败。"""
     job_id = _submit(runner_env, "run", sleep=60)
+    queued = _submit(runner_env, "rebuild")  # 同一条队列，排在后面
     wait_for(lambda: _job(runner_env, job_id).progress == "子进程已启动")
+    process = runner_env.runner._processes[job_id]
     runner_env.runner.shutdown()
-    job = _job(runner_env, job_id)
-    assert job.state == "failed" and "被关闭" in job.error
+    assert process.poll() is not None
+    for job in (_job(runner_env, job_id), _job(runner_env, queued)):
+        assert job.state == "paused" and "关闭" in job.progress and job.error == ""
 
 
 def test_real_worker_process(example_config: Path):
@@ -244,6 +289,9 @@ def test_material_and_model_jobs(m1_env, monkeypatch):
     imported = _run_inline(m1_env, "import_material", {"paths": [str(pdf)], "kind": "slides", "process": False})
     assert imported.state == "done", imported.error
     assert imported.result["url"].startswith("/materials/") and imported.result["summary"] == "导入了 1 份资料"
+    retried = _run_inline(m1_env, "import_material", {"paths": [str(pdf)], "kind": "slides", "process": False})
+    assert retried.result["summary"] == "导入了 0 份资料，1 份之前已导入、沿用原来的"  # 重试不重复导入
+    assert retried.result["url"] == imported.result["url"]
     with Library(m1_env.cfg.data_dir / "lecture.db") as library:
         assert library.course_by_id(m1_env.course_id).slides == "provided"  # 导入课件即视为提供课件
     missing = _run_inline(m1_env, "import_material", {"paths": [str(m1_env.tmp_path / "没有.pdf")], "kind": "slides"})
@@ -319,6 +367,22 @@ def test_pause_all_and_resume_all(runner_env):
     assert runner_env.runner.resume_all() == 1
     assert wait_for(lambda: _finished(runner_env, queued)).state == "done"
     assert runner_env.runner.resume_all() == 0
+
+
+def test_clear_failed_removes_logs_but_not_jobs_still_stopping(runner_env):
+    crashed = _submit(runner_env, "review", outcome="crash")
+    wait_for(lambda: _finished(runner_env, crashed))
+    wait_for(lambda: not runner_env.runner.running())
+    log = log_path(runner_env.cfg.data_dir, crashed)
+    assert log.is_file()
+    stopping = _submit(runner_env, "run", sleep=60)
+    wait_for(lambda: _job(runner_env, stopping).progress == "子进程已启动")
+    with Library(runner_env.db) as library:
+        assert JobStore(library).cancel(stopping)  # 只改任务表（如在另一个书架程序里取消），进程还没结束
+    assert runner_env.runner.clear_failed() == 1  # 还在结束进程、收尾的任务这次不删
+    assert not log.exists() and _job(runner_env, stopping).state == "cancelled"
+    wait_for(lambda: not runner_env.runner.running(), timeout=15)
+    assert runner_env.runner.clear_failed() == 1 and runner_env.runner.clear_failed() == 0
 
 
 def test_job_paused_elsewhere_is_stopped(runner_env):

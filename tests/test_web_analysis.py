@@ -138,11 +138,11 @@ def test_interrupted_jobs_are_failed_on_startup(m1_env):
     db = m1_env.cfg.data_dir / "lecture.db"
     with Library(db) as library:
         job = JobStore(library).add(library.course_by_id(m1_env.course_id), "review", {})
-    with TestClient(create_app(m1_env.cfg), base_url=BASE):  # 启动时成为执行器，先清理上次没执行完的任务
+    with TestClient(create_app(m1_env.cfg), base_url=BASE):  # 启动时成为执行器，先把上次没执行完的任务标为已暂停
         pass
     with Library(db) as library:
         stored = JobStore(library).get(job.id)
-    assert stored.state == "failed" and "被关闭" in stored.error
+    assert stored.state == "paused" and "关闭" in stored.progress
     assert isinstance(create_app(m1_env.cfg).state.jobs, JobRunner)
 
 

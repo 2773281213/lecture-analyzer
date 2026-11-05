@@ -1,5 +1,5 @@
 """网页书架的小型写操作：给讲加删标签、把讲移到别的课程、调整课程在书架上的顺序、记录知识点的复习进度，
-提交考前报告和总复习任务，取消、暂停、继续、重试任务（单个或全部）。
+提交考前报告和总复习任务，取消、暂停、继续、重试任务（单个或全部），清理失败的任务。
 
 都用普通表单 POST，处理完重定向回页面（303）。表单读取与校验、任务提交见 forms.py；
 后台任务的参数先完整校验（课程、讲次、资料、模型都存在）再入队。
@@ -120,7 +120,7 @@ async def submit_review(request: Request, course_id: int) -> RedirectResponse:
 
 # ---------- 后台任务：取消、暂停、继续、重试 ----------
 # 单个任务的按钮在任务页和任务列表里都有：表单带 back=jobs 时回到任务列表，否则回到这个任务的页面。
-# 「全部暂停 / 全部继续 / 全部重试」在任务列表页顶部。
+# 「全部暂停 / 全部继续 / 全部重试 / 清理失败」在任务列表页顶部。
 
 
 def _back(form: dict[str, str], job_id: int) -> str:
@@ -150,6 +150,15 @@ async def retry_all_jobs(request: Request) -> RedirectResponse:
         jobs = JobStore(library).retry_candidates()
         new_ids = {_resubmit(request, library, job) for job in jobs}
     flash(request, f"已重新提交 {len(new_ids)} 个任务" if new_ids else "没有需要重试的任务")
+    return redirect("/jobs")
+
+
+@router.post("/jobs/clear-failed")
+async def clear_failed_jobs(request: Request) -> RedirectResponse:
+    """删除失败和已取消的任务记录（只删记录和日志，已处理好的内容、已完成的步骤不受影响）。"""
+    await read_form(request)
+    count = request.app.state.jobs.clear_failed()
+    flash(request, f"已清理 {count} 个失败或已取消的任务" if count else "没有需要清理的任务")
     return redirect("/jobs")
 
 

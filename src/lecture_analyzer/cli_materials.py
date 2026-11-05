@@ -59,7 +59,9 @@ def material_add(
             console.print(f"[yellow]跳过 {escape(source)}：{escape(reason)}[/yellow]")
         if process:
             process_materials(cfg, library, target, result.materials, report=progress)
-    console.print(f"[green]完成[/green]：导入 {len(result.materials)} 份资料；`lec material list {escape(course)}` 查看")
+    reused = f"（{result.reused} 份之前已导入，沿用原来的）" if result.reused else ""
+    console.print(f"[green]完成[/green]：导入 {len(result.materials) - result.reused} 份资料{reused}；"
+                  f"`lec material list {escape(course)}` 查看")
 
 
 @material_app.command("list")

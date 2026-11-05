@@ -23,10 +23,13 @@
         {{ csrf_field() }}<button class="button">继续处理</button>
       </form>
       {% endif %}
+      {% if not busy_jobs %}
       <form method="post" action="/materials/{{ material.id }}/delete" class="inline-form" data-confirm="删除「{{ material.title }}」及其识别结果和题目？原文件不受影响。">
         {{ csrf_field() }}<button class="button button-danger">删除这份资料</button>
       </form>
+      {% endif %}
     </div>
+    {% if busy_jobs %}<p class="muted small">这门课还有 {{ busy_jobs }} 个没结束的后台任务，等它们完成或在<a href="/jobs">后台任务</a>里取消后才能删除这份资料。</p>{% endif %}
   </header>
 
   {% if items %}

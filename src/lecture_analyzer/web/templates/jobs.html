@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_forms.html" import csrf_field, state_chip %}
+{% from "_forms.html" import csrf_field, state_chip, models_notice %}
 {% block title %}后台任务 · 课程书架{% endblock %}
 {% block nav %}<span class="topbar-note">后台任务</span>{% endblock %}
 {% block body %}
@@ -23,8 +23,14 @@
         {{ csrf_field() }}<button class="button">全部重试（{{ retry_count }}）</button>
       </form>
       {% endif %}
+      {% if clear_count %}
+      <form method="post" action="/jobs/clear-failed" data-confirm="从列表里删除 {{ clear_count }} 个失败或已取消的任务？只删任务记录，已处理好的内容和已完成的步骤不受影响，要再做时重新提交即可。">
+        {{ csrf_field() }}<button class="button button-quiet">清理失败（{{ clear_count }}）</button>
+      </form>
+      {% endif %}
     </div>
   </header>
+  {{ models_notice(unready_models) }}
   {% if jobs %}
   <div class="table-wrap">
     <table class="signals">

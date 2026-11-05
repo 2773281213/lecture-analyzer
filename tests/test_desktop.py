@@ -108,11 +108,12 @@ def test_server_thread_serves_and_close_asks_about_jobs(example_config, monkeypa
         JobStore(library).add(library.add_course("病毒学", CourseSettings()), "rebuild", {})
     questions = []
     monkeypatch.setattr(desktop, "ask", lambda message: questions.append(message) or False)
-    assert not app.confirm_close() and "还有 1 个后台任务没有完成" in questions[0]
+    assert not app.confirm_close() and "还有 1 个后台任务没有完成" in questions[0] and "全部继续" in questions[0]
     server.stop()
     assert not server.thread.is_alive()
     with Library(cfg.data_dir / "lecture.db") as library:
-        assert JobStore(library).active_jobs()[0].state == "queued"  # 只有正在运行的任务才会被结束
+        store = JobStore(library)
+        assert store.active_jobs() == [] and "关闭" in store.paused_jobs()[0].progress  # 没做完的任务标为已暂停
 
 
 @pytest.mark.parametrize(("versions", "expected"), [({}, False), ({"HKLM": "0.0.0.0"}, False),

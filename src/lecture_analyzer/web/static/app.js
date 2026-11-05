@@ -2,6 +2,7 @@
 // - 桌面程序里（pywebview 提供 window.pywebview.api）用原生对话框选择文件、在资源管理器里打开文件夹；
 //   在浏览器里打开书架时没有这些按钮，手动粘贴完整路径；
 // - 课件页面在页内弹窗查看；危险操作先确认；提交后按钮变灰，避免重复提交；
+// - 勾选后批量操作的表单（如批量删除资料）：表头全选，一个都没勾时提示，确认文字里显示勾选的个数；
 // - 后台任务：顶栏显示进行中的任务数；页面上的任务显示进度，结束后刷新页面（页面上有没提交的输入时只提示）；
 //   任务页完成后跳到结果。
 (function () {
@@ -62,6 +63,12 @@
       event.preventDefault();
       return;
     }
+    const duplicates = event.target.closest("[data-check-duplicates]");  // 资料表：勾选来源重复的几份
+    if (duplicates && duplicates.form) {
+      duplicates.form.querySelectorAll("input[data-duplicate]").forEach(function (box) { box.checked = true; });
+      duplicates.form.dataset.dirty = "1";
+      return;
+    }
     const dismiss = event.target.closest("[data-dismiss]");
     if (dismiss) dismiss.parentElement.remove();
   });
@@ -72,9 +79,22 @@
   });
 
   // ---------- 表单：确认、防重复提交、记下有没有改动 ----------
+  // data-need-checked 为批量操作的复选框名：一个都没勾时提示 data-empty；确认文字里的 {n} 换成勾选的个数
+  function checkedCount(form) {
+    return form.querySelectorAll('input[type=checkbox][name="' + form.dataset.needChecked + '"]:checked').length;
+  }
+
   document.addEventListener("submit", function (event) {
     const form = event.target;
-    if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
+    const count = form.dataset.needChecked ? checkedCount(form) : null;
+    if (count === 0) {
+      event.preventDefault();
+      window.alert(form.dataset.empty || "请先勾选");
+      return;
+    }
+    let message = form.dataset.confirm || "";
+    if (count !== null) message = message.replace("{n}", String(count));
+    if (message && !window.confirm(message)) {
       event.preventDefault();
       return;
     }
@@ -101,6 +121,16 @@
   document.addEventListener("input", function (event) {
     const form = event.target.closest("form");
     if (form) form.dataset.dirty = "1";
+  });
+
+  // 表头的全选框：data-check-all 为同一表单里要一起勾选的复选框名
+  document.addEventListener("change", function (event) {
+    const all = event.target.closest("[data-check-all]");
+    const form = all && all.closest("form");
+    if (!form) return;
+    form.querySelectorAll('input[type=checkbox][name="' + all.dataset.checkAll + '"]').forEach(function (box) {
+      box.checked = all.checked;
+    });
   });
 
   function pageIsDirty() {

@@ -247,11 +247,11 @@ class DesktopApp:
     def confirm_close(self) -> bool:
         """关窗前：还有没结束的后台任务时先确认；返回 False 表示不关。"""
         runner = self.server.app.state.jobs if self.server else None
-        count = self.server.active_jobs() if runner is not None and runner.owner else 0  # 只有本进程执行的任务会中断
+        count = self.server.active_jobs() if runner is not None and runner.owner else 0  # 只有本进程执行的任务会暂停
         if not count:
             return True
-        return ask(f"还有 {count} 个后台任务没有完成。关闭书架会中断它们（已完成的步骤不会丢失，再次提交会接着做）。\n\n"
-                   "确定要关闭吗？")
+        return ask(f"还有 {count} 个后台任务没有完成。关闭书架会暂停它们：下次打开后在「后台任务」里点「全部继续」"
+                   "接着做（已完成的步骤不会丢失）。\n\n确定要关闭吗？")
 
     def run(self, config: Path | None) -> None:
         import webview

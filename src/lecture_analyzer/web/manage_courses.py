@@ -1,5 +1,5 @@
 """网页里管理课程和资料：新建课程、修改设置、删除课程、课件关卡（选择是否提供课件）、处理与重建课程记忆、
-导入和删除资料。耗时的操作都提交成后台任务。"""
+导入和删除资料（单份，或在课程资料表里勾选几份一起删）。耗时的操作都提交成后台任务。"""
 
 from __future__ import annotations
 
@@ -12,18 +12,19 @@ from ..asr import ASR_BACKENDS, language_problem
 from ..config import AppConfig
 from ..course import LANGUAGE_NAMES, CourseSettings, SettingsError, build_settings
 from ..jobs import ensure_idle
-from ..library import Course
-from ..materials import MATERIAL_KINDS, MaterialStore
+from ..library import Course, Library
+from ..materials import MATERIAL_KINDS, Material, MaterialStore
 from ..pipeline.ingest import remove_material
 from ..pipeline.organize import delete_course, rerun_step_for_settings
 from ..pipeline.run import STEP_LABELS
 from .forms import (
-    LONG_FORM_BYTES, Form, enqueue, flash, gate_url, int_field, library_of, path_list, read_form, redirect,
+    LONG_FORM_BYTES, Form, enqueue, flash, gate_url, int_field, library_of, numbers, path_list, read_form, redirect,
     run_params, submit_job, text_field,
 )
 from .views import spine_color
 
 router = APIRouter()
+MATERIAL_FORM_FIELDS = 1000  # 批量删除资料：每份勾选的资料一个字段
 MAX_COURSE_NAME = 60
 SETTINGS_KEYS = ("subject", "teaching", "interpreted_to")
 COMMON_LANGUAGES = ("zh", "ko", "en", "ja")  # 课程表单里直接勾选的语言；其他语言填代码
@@ -197,9 +198,37 @@ async def delete_material(request: Request, material_id: int) -> RedirectRespons
     with library_of(request) as library:
         material = MaterialStore(library).get(material_id)
         course = library.course_by_id(material.course_id)
-        ensure_idle(library, course, "删除资料")
-        affected = MaterialStore(library).lectures_using(material_id)
-        remove_material(library, request.app.state.cfg.data_dir, material_id)
-    note = f"；{len(affected)} 讲用到了这份资料，下次处理时会重新匹配课件" if affected else ""
-    flash(request, f"已删除资料「{material.title}」{note}")
+        _remove_materials(request, library, course, [material])
     return redirect(f"/courses/{course.id}#materials")
+
+
+@router.post("/courses/{course_id}/materials/delete")
+async def delete_materials(request: Request, course_id: int) -> RedirectResponse:
+    """删除课程资料表里勾选的几份资料（填错了、重复导入了的，删掉后重新导入）。"""
+    form = await read_form(request, LONG_FORM_BYTES, MATERIAL_FORM_FIELDS)
+    ids = list(dict.fromkeys(numbers(form.getlist("material"), "资料编号")))
+    if not ids:
+        raise HTTPException(400, "请先勾选要删除的资料")
+    with library_of(request) as library:
+        course = library.course_by_id(course_id)
+        store = MaterialStore(library)
+        materials = [store.get(material_id) for material_id in ids]
+        if any(material.course_id != course.id for material in materials):
+            raise HTTPException(400, "所选的资料不属于这门课")
+        _remove_materials(request, library, course, materials)
+    return redirect(f"/courses/{course.id}#materials")
+
+
+def _remove_materials(request: Request, library: Library, course: Course, materials: list[Material]) -> None:
+    """删除资料（这门课不能有没结束的任务），提示删了什么、哪些讲下次处理时要重新匹配课件。原文件不受影响。"""
+    ensure_idle(library, course, "删除资料")
+    store = MaterialStore(library)
+    affected: set[int] = set()
+    for material in materials:
+        affected.update(store.lectures_using(material.id))
+        remove_material(library, request.app.state.cfg.data_dir, material.id)
+    single = len(materials) == 1
+    what = f"「{materials[0].title}」" if single else f" {len(materials)} 份"
+    note = (f"；{len(affected)} 讲用到了{'这份' if single else '这些'}资料，下次处理时会重新匹配课件"
+            if affected else "")
+    flash(request, f"已删除资料{what}{note}")

@@ -127,8 +127,9 @@ def _import_material(cfg: AppConfig, library: Library, job: Job, report: Report)
     if params.get("process", True):
         process_materials(cfg, library, course, result.materials, report=report)
     single = len(result.materials) == 1
+    reused = f"，{result.reused} 份之前已导入、沿用原来的" if result.reused else ""
     return {"url": f"/materials/{result.materials[0].id}" if single else _course_url(course, "#materials"),
-            "summary": f"导入了 {len(result.materials)} 份资料",
+            "summary": f"导入了 {len(result.materials) - result.reused} 份资料{reused}",
             "warnings": [f"跳过 {source}：{reason}" for source, reason in result.skipped]}
 
 

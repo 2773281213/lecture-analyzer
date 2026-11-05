@@ -1,5 +1,6 @@
 """资料入库：展开文件 / 文件夹 / 压缩包 → 复制到 data/materials/<编号>/ → 拆页 → 逐页识别。
 
+- 导入可以安全地重做：已经导入过的同一份文档沿用原来的资料，中断留下的残缺资料删掉重导。
 - 拆页在本机完成：页面图片存为 pages/<页码>.png，抽取的文字存为 pages.json；Office 文档先转成 PDF。
 - 逐页识别调用模型（[steps] page_digest），按批并发，每批完成就写入书库：中断后再运行只识别还没识别的页。
 - 课件类资料导入或删除后，这门课自动匹配的讲标记为"待重新匹配"，下次运行时重新匹配课件
@@ -30,8 +31,9 @@ Report = Callable[[str], None]
 
 @dataclass
 class ImportResult:
-    materials: list[Material] = field(default_factory=list)
+    materials: list[Material] = field(default_factory=list)  # 这次的全部资料，含之前已导入、沿用的
     skipped: list[tuple[str, str]] = field(default_factory=list)  # （位置，原因）
+    reused: int = 0  # 之前已导入过、这次沿用的份数
 
 
 def material_dir(data_dir: Path, material_id: int) -> Path:
@@ -53,7 +55,10 @@ def import_materials(
     library: Library, data_dir: Path, course: Course, inputs: Sequence[Path], kind: str,
     title: str = "", report: Report = print,
 ) -> ImportResult:
-    """导入文件、文件夹或压缩包：每个文档成为一份资料，复制进书库目录并拆页（不调用模型）。"""
+    """导入文件、文件夹或压缩包：每个文档成为一份资料，复制进书库目录并拆页（不调用模型）。
+
+    同一门课、同一类型、同一来源、内容没变的文档已经导入过时沿用原来的资料，不重复导入：
+    导入任务被暂停、取消或书架被关闭后再继续、重试，只导入还没导入的文档。"""
     store = MaterialStore(library)
     staging_root = data_dir / "work" / "import"
     staging_root.mkdir(parents=True, exist_ok=True)
@@ -65,13 +70,48 @@ def import_materials(
             reasons = "；".join(f"{source}：{reason}" for source, reason in expanded.skipped[:5])
             raise LibraryError("没有找到可以导入的文档" + (f"（{reasons}）" if reasons else ""))
         for document in expanded.documents:
-            name = title if title and len(expanded.documents) == 1 else document.title
-            material = _import_one(store, data_dir, course, kind, name, document)
-            report(f"已导入「{material.title}」：{material.page_count} 页")
+            material = _imported_before(library, data_dir, course, kind, document)
+            if material is not None:
+                result.reused += 1
+                report(f"「{material.title}」之前已导入，沿用原来的（{material.page_count} 页）")
+            else:
+                name = title if title and len(expanded.documents) == 1 else document.title
+                # 重新读取课程：删掉残缺资料可能改了课程的课件状态
+                material = _import_one(store, data_dir, library.course_by_id(course.id), kind, name, document)
+                report(f"已导入「{material.title}」：{material.page_count} 页")
             result.materials.append(material)
-    if kind in PAGE_KINDS:
+    if kind in PAGE_KINDS and result.reused < len(result.materials):  # 全是沿用的，课件没变，不用重新匹配
         mark_rematch(library, store, course)
     return result
+
+
+def _imported_before(library: Library, data_dir: Path, course: Course, kind: str,
+                     document: FoundDocument) -> Material | None:
+    """这门课里同一类型、同一来源、内容没变的已导入资料；没有时返回 None。
+
+    上次导入被中断（进程被结束，来不及撤销）留下的、没拆完页的残缺资料先删掉，再照常重新导入；
+    来源文件改过（与书库里的副本大小不同）的当作新资料导入，原来那份保留。
+    书架里的导入任务在重任务队列里一个个执行；同一时间用命令行往同一门课导入同一份文档时，
+    正在拆页的那份会被当作残缺资料删掉，不要这样做。"""
+    found = None
+    for material in MaterialStore(library).list(course, [kind]):
+        if material.source != document.source:
+            continue
+        if material.step_state("pages") != "done":
+            remove_material(library, data_dir, material.id)
+        elif found is None and _same_file(data_dir, material, document):
+            found = material
+    return found
+
+
+def _same_file(data_dir: Path, material: Material, document: FoundDocument) -> bool:
+    """书库里的副本和来源文件大小相同（几张图片合成的资料没有单个原文件，只按来源判断）。"""
+    if document.is_images and len(document.paths) > 1:
+        return True
+    try:
+        return (data_dir / material.path).stat().st_size == document.paths[0].stat().st_size
+    except OSError:
+        return False
 
 
 def _import_one(

@@ -4,10 +4,11 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from lecture_analyzer.course import CourseSettings
 from lecture_analyzer.jobs import JobStore
 from lecture_analyzer.library import Library
 from lecture_analyzer.materials import MaterialStore
-from lecture_analyzer.web import create_app
+from lecture_analyzer.web import create_app, views
 
 from .test_materials import _pdf
 from .test_pipeline_run import _run
@@ -215,6 +216,87 @@ def test_delete_material_and_busy_course(m1_env, tmp_path):
     assert removed.headers["location"] == f"/courses/{m1_env.course_id}#materials"
     assert "已删除资料「期中模拟」" in client.get(removed.headers["location"]).text
     assert pdf.is_file()  # 原文件不受影响
+
+
+def test_delete_several_materials_from_course_page(m1_env):
+    with Library(_db(m1_env)) as library:
+        course = library.course_by_id(m1_env.course_id)
+        store = MaterialStore(library)
+        materials = [store.add(course, "slides", f"第{n}章", f"第{n}章.pdf") for n in (1, 2, 3)]
+        foreign = store.add(library.add_course("病毒学", CourseSettings()), "slides", "别的课", "别的课.pdf")
+    client = _client(m1_env)
+    url = f"/courses/{m1_env.course_id}/materials/delete"
+    page = client.get(f"/courses/{m1_env.course_id}").text
+    assert f'action="{url}"' in page and "data-check-all" in page
+    assert f'name="material" value="{materials[0].id}"' in page
+    assert _post(client, url).status_code == 400  # 一个都没勾
+    mixed = _post(client, url, material=[str(materials[0].id), str(foreign.id)])
+    assert mixed.status_code == 400 and "不属于这门课" in mixed.text
+    removed = _post(client, url, material=[str(materials[0].id), str(materials[1].id)])
+    assert removed.headers["location"] == f"/courses/{m1_env.course_id}#materials"
+    assert "已删除资料 2 份" in client.get(removed.headers["location"]).text
+    with Library(_db(m1_env)) as library:
+        course = library.course_by_id(m1_env.course_id)
+        assert [m.id for m in MaterialStore(library).list(course)] == [materials[2].id]
+        JobStore(library).pause(JobStore(library).add(course, "rebuild", {}).id)  # 暂停的任务也算没结束
+    page = client.get(f"/courses/{m1_env.course_id}").text
+    assert f'action="{url}"' not in page and "还有 1 个没结束的后台任务" in page  # 不给删除入口，说明原因
+    detail = client.get(f"/materials/{materials[2].id}").text
+    assert f'action="/materials/{materials[2].id}/delete"' not in detail and "1 个没结束的后台任务" in detail
+    refused = _post(client, url, material=[str(materials[2].id)])
+    assert refused.status_code == 400 and "还有没结束的后台任务" in refused.text
+
+
+def test_same_source_materials_are_marked(m1_env):
+    """同一类型、同一来源导入了几份的资料（以前重试导入会重复）：标出来，能一键勾选，留识别完的那份。"""
+    with Library(_db(m1_env)) as library:
+        course = library.course_by_id(m1_env.course_id)
+        store = MaterialStore(library)
+        first = store.add(course, "slides", "第一章", r"D:\课件\第一章.pdf")
+        store.set_step(first.id, "pages", "done")
+        copy = store.add(course, "slides", "第一章", r"D:\课件\第一章.pdf")
+        for step in ("pages", "digest"):
+            store.set_step(copy.id, step, "done")
+        broken = store.add(course, "slides", "第一章", r"D:\课件\第一章.pdf")  # 导入被中断：没拆完页
+        textbook = store.add(course, "textbook", "第一章", r"D:\课件\第一章.pdf")  # 类型不同，不算重复
+        assert views.same_source(store.list(course)) == {first.id: copy.id, broken.id: copy.id}
+    page = _client(m1_env).get(f"/courses/{m1_env.course_id}").text
+    assert page.count(f"与 #{copy.id} 来源相同") == 2 and "勾选来源重复的（2）" in page
+    assert page.count("data-duplicate") == 2 and f'value="{textbook.id}" aria-label' in page
+
+
+def test_unready_models_are_announced(example_config, monkeypatch):
+    """步骤用的模型没填型号或缺少密钥：提交任务的页面先提示（以前要等任务处理到那一步才失败）。"""
+    from lecture_analyzer.config import load_config
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")  # claude 就绪；gemini 没填型号
+    cfg = load_config(example_config)
+    unready = dict(views.unready_models(cfg, views.ready_profiles(cfg)))
+    assert "claude" not in unready and unready["gemini"][0] == "课件和资料逐页识别"
+    llm_asr = cfg.model_copy(update={"asr": cfg.asr.model_copy(update={"backend": "llm"})})
+    assert dict(views.unready_models(llm_asr, ["claude"]))["gemini"][0] == "转写"  # 大模型转写也检查
+    page = TestClient(create_app(cfg), base_url=BASE).get("/jobs").text
+    assert "模型档案「gemini」还没就绪" in page and 'href="/settings#models"' in page
+    monkeypatch.setattr(views, "ready_profiles", lambda cfg: list(cfg.models))
+    assert "还没就绪" not in TestClient(create_app(cfg), base_url=BASE).get("/jobs").text
+
+
+def test_jobs_page_lists_every_job_and_clears_failed(m1_env):
+    client = TestClient(create_app(m1_env.cfg), base_url=BASE, follow_redirects=False)  # 真正的执行器，不启动队列
+    with Library(_db(m1_env)) as library:
+        store = JobStore(library)
+        course = library.course_by_id(m1_env.course_id)
+        jobs = [store.add(course, "rebuild", {"from_seq": n}) for n in range(1, 61)]
+        for job in jobs[:55]:
+            store.fail(job.id, "缺少密钥")
+    page = client.get("/jobs").text
+    assert f"<td>#{jobs[0].id}</td>" in page and "清理失败（55）" in page  # 最早的任务也列出来（以前只显示 50 个）
+    cleared = _post(client, "/jobs/clear-failed")
+    assert cleared.headers["location"] == "/jobs"
+    page = client.get("/jobs").text
+    assert "已清理 55 个失败或已取消的任务" in page and "清理失败（" not in page
+    remaining = {job.id for job in _jobs(m1_env)}
+    assert remaining >= {job.id for job in jobs[55:]} and remaining.isdisjoint(job.id for job in jobs[:55])
 
 
 def test_path_fields_have_unique_ids(m1_env):

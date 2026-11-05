@@ -42,7 +42,7 @@
       {% endif %}
     </div>
     {% if job.paused %}<p class="muted small">任务已暂停：点「继续」接着做，已完成的步骤、已识别的页不会重做。</p>{% endif %}
-    <p class="muted small">任务在后台运行，可以离开本页，在顶栏的「后台任务」里查看；关闭书架程序会中断任务，再次提交时已完成的步骤不会重做。</p>
+    <p class="muted small">任务在后台运行，可以离开本页，在顶栏的「后台任务」里查看；关闭书架程序会暂停任务，下次打开后点「继续」接着做，已完成的步骤不会重做。</p>
   </section>
   <p>{% if course %}<a class="pill" href="/courses/{{ course.id }}">返回课程</a> {% endif %}<a class="pill" href="/jobs">全部任务</a></p>
 </main>

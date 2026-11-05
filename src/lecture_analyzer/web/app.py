@@ -189,7 +189,7 @@ def _register_analysis_pages(app: FastAPI, templates: Jinja2Templates, db_path: 
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs_page(request: Request) -> HTMLResponse:
         with Library(db_path) as library:
-            context = jobs_view(library)
+            context = jobs_view(library, app.state.cfg)
         return templates.TemplateResponse(request, "jobs.html", context)
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)

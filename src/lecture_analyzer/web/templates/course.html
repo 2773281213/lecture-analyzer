@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_forms.html" import csrf_field, paths_field, force_select, jobs_panel, state_chip %}
+{% from "_forms.html" import csrf_field, paths_field, force_select, jobs_panel, state_chip, models_notice %}
 {% block title %}{{ course.name }} · 课程书架{% endblock %}
 {% block nav %}<span class="topbar-note">{{ course.name }}</span>{% endblock %}
 {% block body %}
@@ -40,6 +40,7 @@
   </header>
 
   {{ jobs_panel(active_jobs) }}
+  {{ models_notice(unready_models) }}
 
   {% if course.slides == "unset" %}
   <div class="notice">
@@ -108,15 +109,22 @@
     <h2>课程资料</h2>
     <p class="meta">课件：{{ SLIDES_LABELS[course.slides] }}</p>
     {% if materials %}
+    {% set can_delete = not busy_jobs %}
+    {% if can_delete %}
+    <form method="post" action="/courses/{{ course.id }}/materials/delete" data-need-checked="material" data-empty="请先勾选要删除的资料"
+          data-confirm="删除勾选的 {n} 份资料及其识别结果和题目？原文件不受影响。">
+      {{ csrf_field() }}
+    {% endif %}
     <div class="table-wrap">
       <table class="signals">
-        <thead><tr><th>编号</th><th>类型</th><th>标题</th><th>页数</th><th>识别</th><th>题目</th></tr></thead>
+        <thead><tr>{% if can_delete %}<th><label class="check-label"><input type="checkbox" data-check-all="material" aria-label="全选"></label></th>{% endif %}<th>编号</th><th>类型</th><th>标题</th><th>页数</th><th>识别</th><th>题目</th></tr></thead>
         <tbody>
         {% for row in materials %}
         <tr>
+          {% if can_delete %}<td><label class="check-label"><input type="checkbox" name="material" value="{{ row.material.id }}"{{ " data-duplicate" if row.same_as }} aria-label="选择「{{ row.material.title }}」"></label></td>{% endif %}
           <td>{{ row.material.id }}</td>
           <td>{{ row.material.kind_label }}</td>
-          <td><a href="/materials/{{ row.material.id }}">{{ row.material.title }}</a></td>
+          <td><a href="/materials/{{ row.material.id }}">{{ row.material.title }}</a>{% if row.same_as %} <span class="chip state-stale" title="同一类型、同一来源的资料导入了不止一份">与 #{{ row.same_as }} 来源相同</span>{% endif %}</td>
           <td>{{ row.material.page_count }}</td>
           <td>{% if row.material.step_state("digest") == "done" %}完成{% else %}{{ row.digested }}/{{ row.material.page_count }} 页{% endif %}</td>
           <td>{% if row.material.step_state("items") == "done" %}{{ row.items }} 条{% if row.stale %}<span class="chip state-stale">对应待更新</span>{% endif %}{% else %}—{% endif %}</td>
@@ -125,6 +133,16 @@
         </tbody>
       </table>
     </div>
+    {% if can_delete %}
+      {% set duplicates = materials | selectattr("same_as") | list %}
+      <p class="form-actions">
+        {% if duplicates %}<button type="button" class="button button-quiet" data-check-duplicates>勾选来源重复的（{{ duplicates | length }}）</button>{% endif %}
+        <button class="button button-danger">删除勾选的资料</button><span class="muted small">填错类型、导错课程或重复导入的资料，删掉后重新导入即可</span>
+      </p>
+    </form>
+    {% else %}
+    <p class="muted small">这门课还有 {{ busy_jobs }} 个没结束的后台任务（含已暂停的），等它们完成或在<a href="/jobs">后台任务</a>里取消后才能删除资料；取消不会丢掉已完成的步骤。</p>
+    {% endif %}
     {% if pending_materials %}
     <form method="post" action="/courses/{{ course.id }}/materials/process" class="form-actions">
       {{ csrf_field() }}

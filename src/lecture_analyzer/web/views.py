@@ -7,7 +7,8 @@ from typing import Any, Sequence
 
 from ..books import lecture_media_type, media_type
 from ..config import AppConfig
-from ..jobs import Job, JobStore
+from ..config_edit import STEP_LABELS as CONFIG_STEP_LABELS
+from ..jobs import Job, JobStore, unfinished_jobs
 from ..knowledge import CourseMemory, HistorySignal, KnowledgePoint, LectureCache
 from ..library import Course, Lecture, Library, PageRef
 from ..materials import ITEM_KINDS, PAGE_KINDS, Material, MaterialStore
@@ -124,14 +125,17 @@ def course_view(library: Library, course: Course, tag: str | None, cfg: AppConfi
     lectures = library.lectures(course)
     chapters = _kp_chapters(library, course)
     materials = material_rows(library, course)
+    ready = ready_profiles(cfg)
     return {
+        "unready_models": unready_models(cfg, ready),
         "materials": materials,
         "pending_materials": any(unfinished(row.material) for row in materials),
         "reports": ReportStore(library).list(course)[:20],
         "jobs": JobStore(library).recent(course),
         "active_jobs": JobStore(library).active_jobs(course),
+        "busy_jobs": len(unfinished_jobs(library, course)),  # 有没结束的任务时不能删除资料
         "next_seq": next_free_seq(library, course),
-        "models": ready_profiles(cfg),
+        "models": ready,
         "default_model": cfg.steps.get("report", ""),
         "all_lectures": lectures,
         "course": course,
@@ -261,6 +265,22 @@ class MaterialRow:
     digested: int  # 已识别的页数
     items: int
     stale: bool  # 题目与知识点的对应待更新
+    same_as: int | None = None  # 同一类型、同一来源的另一份资料（多半是重复导入的）：留下的那份的编号
+
+
+def same_source(materials: Sequence[Material]) -> dict[int, int]:
+    """同一类型、同一来源导入了几份的资料：{编号: 留下的那份的编号}（以前中断后继续、重试导入任务会重复导入）。
+
+    每组留一份：拆完页、识别完的优先，同样时留最早的；其余（含没拆完页的残缺资料）标出来，方便勾选删除。"""
+    groups: dict[tuple[str, str], list[Material]] = {}
+    for material in materials:  # 按书架上的顺序（最早的在前）
+        groups.setdefault((material.kind, material.source), []).append(material)
+    same: dict[int, int] = {}
+    for group in groups.values():
+        if len(group) > 1:
+            keep = max(group, key=lambda m: (m.step_state("pages") == "done", m.step_state("digest") == "done"))
+            same.update({m.id: keep.id for m in group if m.id != keep.id})
+    return same
 
 
 def unfinished(material: Material) -> bool:
@@ -272,7 +292,10 @@ def unfinished(material: Material) -> bool:
 def material_rows(library: Library, course: Course) -> list[MaterialRow]:
     store = MaterialStore(library)
     stale = {m.id for m in stale_materials(library, course)}
-    return [MaterialRow(m, len(store.pages(m.id)), len(store.items(m.id)), m.id in stale) for m in store.list(course)]
+    materials = store.list(course)
+    same = same_source(materials)
+    return [MaterialRow(m, len(store.pages(m.id)), len(store.items(m.id)), m.id in stale, same.get(m.id))
+            for m in materials]
 
 
 def material_view(library: Library, data_dir: Any, material: Material) -> dict[str, Any]:
@@ -287,6 +310,7 @@ def material_view(library: Library, data_dir: Any, material: Material) -> dict[s
         "items": [(item, [(key, names.get(key, "")) for key in item.kp_keys]) for item in store.items(material.id)],
         "stale": material.id in {m.id for m in stale_materials(library, course)},
         "unfinished": unfinished(material),
+        "busy_jobs": len(unfinished_jobs(library, course)),  # 有没结束的任务时不能删除
         "lectures": sorted(using, key=lambda lecture: lecture.seq),
         "ITEM_TYPES": ITEM_TYPES,
     }
@@ -296,6 +320,21 @@ def ready_profiles(cfg: AppConfig) -> list[str]:
     """填好了型号和密钥、可以直接调用的模型档案。"""
     return [name for name, profile in cfg.models.items()
             if profile.is_configured and (not profile.api_key_env or profile.api_key())]
+
+
+def unready_models(cfg: AppConfig, ready: Sequence[str]) -> list[tuple[str, list[str]]]:
+    """各步骤指定的、还没就绪的模型档案（没填型号、缺少密钥或不存在）和用到它的步骤：[(档案名, [步骤])]。
+
+    用到这些步骤的任务要等处理到那一步才失败（往往已经转写、识别了很久），所以在提交任务的页面先提示。
+    ready 为 ready_profiles 的结果（调用方已经算过，免得再读一遍凭据管理器）。"""
+    uses = [(CONFIG_STEP_LABELS.get(step, step).split("（")[0], name) for step, name in cfg.steps.items()]
+    if cfg.asr.backend == "llm":
+        uses.insert(0, ("转写", cfg.asr.llm_profile))
+    missing: dict[str, list[str]] = {}
+    for label, name in uses:
+        if name not in ready:
+            missing.setdefault(name, []).append(label)
+    return list(missing.items())
 
 
 # ---------- 考前报告与后台任务 ----------
@@ -313,14 +352,16 @@ def job_view(library: Library, job: Job) -> dict[str, Any]:
     return {"job": job, "course": course, "spine": spine_color(course) if course else SPINE_COLORS[0]}
 
 
-def jobs_view(library: Library) -> dict[str, Any]:
-    """任务页：最近的任务，最新的在前；顶部的「全部暂停 / 全部继续 / 全部重试」按全部任务统计（不限于这 50 个）。"""
+def jobs_view(library: Library, cfg: AppConfig) -> dict[str, Any]:
+    """任务页：全部任务，最新的在前；顶部按钮的计数：全部暂停 / 全部继续 / 全部重试 / 清理失败；
+    还有没就绪的模型时提示（排队的任务处理到那一步会失败）。"""
     store = JobStore(library)
-    jobs = store.latest(50)
+    jobs = store.latest()
     return {"jobs": jobs, "course_names": {course.id: course.name for course in library.courses()},
+            "unready_models": unready_models(cfg, ready_profiles(cfg)),
             "has_active": any(not job.finished for job in jobs),
             "active_count": len(store.active_jobs()), "paused_count": len(store.paused_jobs()),
-            "retry_count": len(store.retry_candidates())}
+            "retry_count": len(store.retry_candidates()), "clear_count": sum(job.retryable for job in jobs)}
 
 
 def _continuous_total(lecture: Lecture, offsets: Sequence[int]) -> int | None:
