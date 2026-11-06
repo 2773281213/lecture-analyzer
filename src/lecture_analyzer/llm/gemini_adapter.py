@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from .base import (
     AudioPart,
+    ContentBlockedError,
     Effort,
     EmptyResponseError,
     ImagePart,
@@ -19,6 +20,7 @@ from .base import (
     Part,
     TextPart,
     Usage,
+    looks_content_blocked,
 )
 
 # 统一的 effort 档位映射到 Gemini 的思考级别（仅在档案声明 supports_effort 时发送）
@@ -75,7 +77,13 @@ class GeminiProvider(LLMProvider):
                 config=types.GenerateContentConfig(**config),
             )
         except errors.APIError as exc:
-            raise LLMError(f"模型档案「{self.profile.name}」请求失败：{type(exc).__name__}: {str(exc)[:300]}") from exc
+            detail = str(exc)
+            if getattr(exc, "code", None) == 400 and looks_content_blocked(detail):
+                raise ContentBlockedError(
+                    f"模型档案「{self.profile.name}」的这次输入被上游的内容审核拦下（HTTP 400），没有产生结果："
+                    f"{detail[:260]}"
+                ) from exc
+            raise LLMError(f"模型档案「{self.profile.name}」请求失败：{type(exc).__name__}: {detail[:300]}") from exc
         usage = _to_usage(response.usage_metadata)
         if not response.candidates:
             feedback = getattr(response, "prompt_feedback", None)

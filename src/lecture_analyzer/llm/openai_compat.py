@@ -11,6 +11,9 @@
 要求了 JSON（json_schema、json_object）却连一个 JSON 对象都没有时，这段文字不是模型按格式生成的结果，
 而是中转站代替结果返回的说明，按拦截处理（EmptyResponseError）。M4 验收实测：Gemini 内容过滤拦截
 生物学内容时，中转站返回一段英文说明，finish_reason 为 stop，没有用量。
+另一种拦截发生在请求阶段：上游直接返回 400（例如「This request was blocked by Gemini's filters」），
+流式请求时它会在 HTTP 200 之后以一个数据块的形式回来、SDK 抛不带状态码的 APIError；
+两种都按拦截处理（ContentBlockedError），这样转写不会因为一片被拦而整个任务失败。
 
 档案选项 options.stream = true 时改用流式请求：服务端边生成边返回，长输出不会因为中转站
 （例如 Cloudflare 的 100–120 秒等待上限）迟迟收不到响应而断开（524）。数据块由这里自己累积，
@@ -30,6 +33,7 @@ from pydantic import BaseModel
 
 from .base import (
     AudioPart,
+    ContentBlockedError,
     Effort,
     EmptyResponseError,
     ImagePart,
@@ -39,6 +43,7 @@ from .base import (
     Part,
     TextPart,
     Usage,
+    looks_content_blocked,
     retry_transient,
     schema_instruction,
 )
@@ -135,7 +140,8 @@ class OpenAICompatProvider(LLMProvider):
 
     def _request(self, kwargs: dict[str, Any]) -> Any:
         """发一次请求，临时错误（连接错误、超时、服务端暂时不可用）等一会儿整体重发，
-        其他接口错误转成 LLMError（截断、内容过滤等结束原因由 _content 判断）。"""
+        其他接口错误转成 LLMError（截断、内容过滤等结束原因由 _content 判断）。
+        请求阶段就被内容审核拒绝的 400 单独转成 ContentBlockedError，调用方可以换个办法（如切小音频）。"""
         if self.profile.options.get("stream", False):
             send = lambda: self._stream(kwargs)  # noqa: E731
         else:
@@ -143,7 +149,13 @@ class OpenAICompatProvider(LLMProvider):
         try:
             return retry_transient(send, TRANSIENT_ERRORS, self.profile.name)
         except openai.APIError as exc:
-            raise LLMError(f"模型档案「{self.profile.name}」请求失败：{type(exc).__name__}: {str(exc)[:300]}") from exc
+            detail = _error_text(exc)
+            if _is_content_block(exc, detail):
+                raise ContentBlockedError(
+                    f"模型档案「{self.profile.name}」的这次输入被上游的内容审核拦下（HTTP 400），没有产生结果："
+                    f"{detail[:260]}"
+                ) from exc
+            raise LLMError(f"模型档案「{self.profile.name}」请求失败：{type(exc).__name__}: {detail[:300]}") from exc
 
     def _stream(self, kwargs: dict[str, Any]) -> Any:
         """流式请求，读完后返回与非流式相同形状的结果（choices[0].message、finish_reason、usage）。"""
@@ -208,6 +220,21 @@ def _audio_format(mime_type: str) -> str:
         return _AUDIO_FORMATS[mime_type]
     except KeyError:
         raise LLMError(f"OpenAI 兼容接口不支持 {mime_type} 音频，请转成 mp3 或 wav") from None
+
+
+def _is_content_block(exc: Exception, detail: str) -> bool:
+    """是不是「上游在请求阶段就拦下了这次输入」。
+
+    非流式请求是 400；流式请求里上游把拒绝当成一个数据块发回来（HTTP 200 之后），SDK 抛的是没有状态码的
+    APIError——药理学第 8 讲实测就是这种（档案开了 options.stream）。
+    """
+    return getattr(exc, "status_code", None) in (None, 400) and looks_content_blocked(detail)
+
+
+def _error_text(exc: Exception) -> str:
+    """错误说明：SDK 的 str(exc) 只带状态码和上游的 message，response body 里有更完整的原文（拦截说明常在这里）。"""
+    body = getattr(exc, "body", None)
+    return str(exc) if body is None else f"{exc} {body}"
 
 
 def _to_usage(completion: Any) -> Usage:

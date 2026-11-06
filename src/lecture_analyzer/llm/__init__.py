@@ -2,6 +2,7 @@
 
 from .base import (
     AudioPart,
+    ContentBlockedError,
     EmptyResponseError,
     ImagePart,
     LLMError,
@@ -12,11 +13,13 @@ from .base import (
     StructuredOutputError,
     TextPart,
     Usage,
+    looks_content_blocked,
 )
 from .registry import adapter_types, create_provider
 
 __all__ = [
     "AudioPart",
+    "ContentBlockedError",
     "EmptyResponseError",
     "ImagePart",
     "LLMError",
@@ -29,4 +32,5 @@ __all__ = [
     "Usage",
     "adapter_types",
     "create_provider",
+    "looks_content_blocked",
 ]

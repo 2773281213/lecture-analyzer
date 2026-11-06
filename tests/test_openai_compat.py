@@ -4,7 +4,7 @@ import pytest
 from pydantic import BaseModel
 
 from lecture_analyzer.llm import (
-    AudioPart, EmptyResponseError, ImagePart, LLMError, StructuredOutputError, TextPart, Usage,
+    AudioPart, ContentBlockedError, EmptyResponseError, ImagePart, LLMError, StructuredOutputError, TextPart, Usage,
 )
 from lecture_analyzer.llm.openai_compat import OpenAICompatProvider
 
@@ -320,6 +320,55 @@ def _status_error(status, cls_name):
 
     response = httpx.Response(status, request=httpx.Request("POST", "https://relay.example/v1"))
     return getattr(openai, cls_name)(f"HTTP {status}", response=response, body=None)
+
+
+def _filtered_400(message):
+    """上游在请求阶段就以 400 拦下这次输入（Gemini 的原始措辞）。"""
+    import httpx
+    import openai
+
+    response = httpx.Response(400, request=httpx.Request("POST", "https://relay.example/v1"))
+    body = {"error": {"message": message, "type": "invalid_request_error"}}
+    return openai.BadRequestError(f"Error code: 400 - {body}", response=response, body=body)
+
+
+def test_request_blocked_by_content_filter_is_reported_as_blocked():
+    """药理学第 8 讲实测：整段音频返回 400「blocked by Gemini's filters」，没有产生任何结果。
+    这不是普通的请求错误——转写要能按「被拦截」处理（切小再试），不能让整个任务失败。"""
+    message = ("This request was blocked by Gemini's filters. They can occasionally trigger by mistake on safe "
+               "coding, security, or biology-related queries. Please try rephrasing your prompt.")
+    completions = _Failing([_filtered_400(message)], _completion())
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAICompatProvider(make_profile(), client=client)
+    with pytest.raises(ContentBlockedError, match="内容审核拦下") as info:
+        provider.generate_text([TextPart("问题")])
+    assert "biology-related" in str(info.value)  # 上游原话带给用户，便于判断
+    assert isinstance(info.value, EmptyResponseError)  # 按拦截处理：调用方的现有分支就能接住
+    assert len(completions.calls) == 1  # 原样重发仍会被拦，不重试
+
+
+def test_other_400_is_still_a_plain_llm_error():
+    completions = _Failing([_filtered_400("model 'gemini-9' not found")], _completion())
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAICompatProvider(make_profile(), client=client)
+    with pytest.raises(LLMError, match="请求失败") as info:
+        provider.generate_text([TextPart("问题")])
+    assert not isinstance(info.value, ContentBlockedError)
+
+
+def test_streamed_content_filter_rejection_counts_as_blocked():
+    """流式请求时上游在 HTTP 200 之后把拒绝当成数据块发回来，SDK 抛的是没有状态码的 APIError。
+    药理学第 8 讲实测就是这种形态；不认出来就会一路抛到任务层，整讲转写失败。"""
+    import httpx
+    import openai
+
+    message = ("This request was blocked by Gemini's filters. They can occasionally trigger by mistake on safe "
+               "coding, security, or biology-related queries. Please try rephrasing your prompt.")
+    rejected = openai.APIError(message, request=httpx.Request("POST", "https://relay.example/v1"), body=None)
+    provider, completions = _streaming_provider(_Stream([rejected]))
+    with pytest.raises(ContentBlockedError, match="内容审核拦下"):
+        provider.generate_structured([TextPart("问题")], Answer)
+    assert len(completions.calls) == 1
 
 
 @pytest.mark.parametrize("stream", [False, True])

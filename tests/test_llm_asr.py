@@ -7,7 +7,7 @@ from lecture_analyzer.asr import llm_backend
 from lecture_analyzer.asr.base import ASRError, Segment, load_segments, save_segments, segments_text
 from lecture_analyzer.asr.llm_backend import LLMTranscriber
 from lecture_analyzer.course import CourseSettings
-from lecture_analyzer.llm import AudioPart, EmptyResponseError, TextPart, Usage
+from lecture_analyzer.llm import AudioPart, ContentBlockedError, EmptyResponseError, TextPart, Usage
 from lecture_analyzer.media import run_ffmpeg
 
 from .conftest import FakeProvider, make_profile
@@ -76,6 +76,24 @@ def test_blocked_piece_is_split_and_retried(three_second_wav: Path, tmp_path: Pa
     assert [s.text for s in segments] == ["前半段", "后半段"]
     assert segments[1].start_ms == 1500 and transcriber.skipped == []
     assert transcriber.usage.input_tokens == 15 + 20  # 被拦截那次消耗的输入也计入
+
+
+def test_piece_rejected_at_request_stage_is_split_and_retried(three_second_wav: Path, tmp_path: Path,
+                                                             monkeypatch):
+    """药理学第 8 讲实测：10 分钟的片段被 Gemini 以 400 拦下（请求阶段就拒绝，没有结果），
+    对半切开后能转写。以前这种 400 会一路抛到任务层，整讲转写失败。"""
+    monkeypatch.setattr(llm_backend, "MIN_PIECE_SECONDS", 1)
+    responses = [
+        ContentBlockedError("模型档案「gemini」的这次输入被上游的内容审核拦下（HTTP 400），没有产生结果",
+                            Usage(15, 0)),
+        _chunk(("00:00", "00:01", "zh", "前半段")),
+        _chunk(("00:00", "00:01", "zh", "后半段")),
+    ]
+    provider = FakeProvider(responses, make_profile(audio=True))
+    transcriber = LLMTranscriber(provider, tmp_path / "work", chunk_minutes=1 / 20)
+    segments = transcriber.transcribe(three_second_wav)
+    assert [s.text for s in segments] == ["前半段", "后半段"]
+    assert transcriber.skipped == []
 
 
 def test_piece_cut_off_twice_is_split_like_a_blocked_one(three_second_wav: Path, tmp_path: Path, monkeypatch):

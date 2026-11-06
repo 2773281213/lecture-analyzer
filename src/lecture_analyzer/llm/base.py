@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -152,6 +153,38 @@ class StructuredOutputError(LLMError):
 class EmptyResponseError(LLMError):
     """模型没有返回可用的结果（空结果，或中转站代替结果返回的拦截说明），多半是上游的内容审核拦截了这次输入
     （同一输入重试通常仍被拦截）。"""
+
+
+class ContentBlockedError(EmptyResponseError):
+    """上游的内容审核在请求阶段就拒绝了这次输入（HTTP 400 / INVALID_ARGUMENT，流式请求时表现为数据块里的拒绝），
+    一个 token 的结果都没有产生。
+
+    和「返回了拦截说明」是同一种情况，处理方法也一样：原样重试仍会被拦，要换办法——转写时把音频切小再试。
+    实测（Gemini 3.8 Flash + 药理学第 8 讲）：10 分钟的片段返回 400「blocked by Gemini's filters」，
+    对半切成两个 5 分钟仍有一半被拦，再切成四个 2.5 分钟就全部转写成功。
+    """
+
+
+# 各家在请求阶段被内容审核拦下时的说法（中转站多把上游原文透传过来）：命中就当内容拦截，不当成普通的请求错误，
+# 否则转写会因为一片被拦而整个任务失败。措辞按各家文档和实测整理，认不出的一律按普通 400 处理。
+_FILTER_HINTS = re.compile(
+    r"blocked by .{0,30}filters?"
+    r"|content[_ ]?filter"
+    r"|content management polic"
+    r"|responsible ai"
+    r"|prohibited[_ ]?content"
+    r"|inappropriate content"
+    r"|safety system|safety polic"
+    r"|usage polic"
+    r"|内容(审核|安全|过滤)"
+    r"|(敏感|违规|不当)[^。，,]{0,8}内容",
+    re.IGNORECASE,
+)
+
+
+def looks_content_blocked(text: str) -> bool:
+    """这段错误说明是不是「被内容审核拦下了这次输入」。"""
+    return bool(_FILTER_HINTS.search(text))
 
 
 RETRY_DELAYS = (5.0, 20.0, 60.0)  # 临时错误重试前等待的秒数（共重试三次）

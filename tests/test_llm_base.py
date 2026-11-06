@@ -2,7 +2,7 @@ import pytest
 from pydantic import BaseModel
 
 from lecture_analyzer.llm import AudioPart, ImagePart, LLMError, StructuredOutputError, TextPart, Usage
-from lecture_analyzer.llm.base import extract_json_text, schema_instruction
+from lecture_analyzer.llm.base import extract_json_text, looks_content_blocked, schema_instruction
 
 from .conftest import FakeProvider, make_profile
 
@@ -25,6 +25,39 @@ def test_extract_json_text_without_json_raises():
 def test_schema_instruction_mentions_json_and_fields():
     text = schema_instruction(Answer)
     assert "JSON" in text and "answer" in text and "score" in text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Gemini（药理学第 8 讲实测原文）
+        "This request was blocked by Gemini's filters. They can occasionally trigger by mistake on safe "
+        "coding, security, or biology-related queries. Please try rephrasing your prompt.",
+        # Azure OpenAI
+        "The response was filtered due to the prompt triggering Azure OpenAI's content management policy",
+        # OpenAI
+        "Your request was rejected as a result of our safety system",
+        "content_filter",
+        "PROHIBITED_CONTENT",
+        # 国内中转站常见的中文说法
+        "该内容未通过内容审核",
+    ],
+)
+def test_content_filter_messages_are_recognized(text):
+    assert looks_content_blocked(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Error code: 400 - model 'gemini-9' not found",
+        "Error code: 400 - max_tokens must be positive",
+        "Error code: 401 - invalid api key",
+        "",
+    ],
+)
+def test_other_errors_are_not_mistaken_for_content_filters(text):
+    assert not looks_content_blocked(text)
 
 
 def test_generate_structured_success():

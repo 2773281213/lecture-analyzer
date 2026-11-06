@@ -4,7 +4,7 @@ import pytest
 from google.genai import types
 from pydantic import BaseModel
 
-from lecture_analyzer.llm import AudioPart, EmptyResponseError, LLMError, TextPart, Usage
+from lecture_analyzer.llm import AudioPart, ContentBlockedError, EmptyResponseError, LLMError, TextPart, Usage
 from lecture_analyzer.llm.gemini_adapter import GeminiProvider
 
 from .conftest import make_profile
@@ -82,3 +82,34 @@ def test_abnormal_finish_raises(response, error, pattern):
     provider, _ = _provider(response)
     with pytest.raises(error, match=pattern):
         provider.generate_text([TextPart("问题")])
+
+
+def test_request_blocked_by_content_filter_is_reported_as_blocked():
+    """原生接口在请求阶段拦下输入时也是 400；要和「返回了拦截说明」一样按拦截处理。"""
+    from google.genai import errors as genai_errors
+
+    def generate_content(**kwargs):
+        raise genai_errors.APIError(
+            400, {"error": {"message": "This request was blocked by Gemini's filters"}}, None
+        )
+
+    values = {"adapter": "gemini", "model": "gemini-test", "audio": True}
+    client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
+    provider = GeminiProvider(make_profile(**values), client=client)
+    with pytest.raises(ContentBlockedError, match="内容审核拦下") as info:
+        provider.generate_text([TextPart("问题")])
+    assert isinstance(info.value, EmptyResponseError)
+
+
+def test_other_400_is_still_a_plain_llm_error():
+    from google.genai import errors as genai_errors
+
+    def generate_content(**kwargs):
+        raise genai_errors.APIError(400, {"error": {"message": "model not found"}}, None)
+
+    values = {"adapter": "gemini", "model": "gemini-test", "audio": True}
+    client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
+    provider = GeminiProvider(make_profile(**values), client=client)
+    with pytest.raises(LLMError, match="请求失败") as info:
+        provider.generate_text([TextPart("问题")])
+    assert not isinstance(info.value, ContentBlockedError)
