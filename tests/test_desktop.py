@@ -1,6 +1,10 @@
 """桌面程序：网页调用的本机功能（用测试替身代替真实窗口）、首次设置、网页服务线程、关窗确认、WebView2 检查。"""
 
+import asyncio
+import socket
+import struct
 import sys
+import threading
 import urllib.request
 from types import SimpleNamespace
 
@@ -19,13 +23,21 @@ from lecture_analyzer.web import create_app
 class FakeWindow:
     """记下要求打开的文件对话框，返回预设的选择结果（None 表示取消）。"""
 
-    def __init__(self, result=None):
+    def __init__(self, result=None, native=None):
         self.result = result
+        self.native = native
         self.dialogs = []
+        self.loaded_urls = []
+        self.loaded_event = threading.Event()
+        self.events = SimpleNamespace(closing=type("Event", (), {"__iadd__": lambda self, fn: self})())
 
     def create_file_dialog(self, dialog_type, directory="", allow_multiple=False, save_filename="", file_types=()):
         self.dialogs.append((int(dialog_type), allow_multiple, tuple(file_types)))
         return self.result
+
+    def load_url(self, url):
+        self.loaded_urls.append(url)
+        self.loaded_event.set()
 
 
 class FakeApp:
@@ -55,6 +67,24 @@ def test_pick_uses_native_dialogs():
     assert api.pick("files", "media") == []
 
 
+def test_pick_marshals_dialog_to_winforms_sta_thread(monkeypatch):
+    invoked = []
+
+    class FakeNative:
+        InvokeRequired = True
+
+        def Invoke(self, action):
+            invoked.append(action)
+            action()
+
+    monkeypatch.setitem(sys.modules, "System", SimpleNamespace(Action=lambda fn: fn))
+    window = FakeWindow(("F:\\课件\\第1章.pdf",), native=FakeNative())
+    api = desktop.DesktopApi(FakeApp(window))
+    assert api.pick("file", "documents") == ["F:\\课件\\第1章.pdf"]
+    assert api.pick("folder") == ["F:\\课件\\第1章.pdf"]
+    assert len(invoked) == 2
+
+
 def test_open_path_only_opens_existing_folders(tmp_path, monkeypatch):
     opened = []
     monkeypatch.setattr(desktop.os, "startfile", opened.append, raising=False)
@@ -82,6 +112,24 @@ def test_first_run_creates_or_opens_a_library(tmp_path):
     assert failing.use_home(str(home), False) == {"error": "书架的网页服务没能启动"}
 
 
+def test_open_library_defers_navigation_until_after_return_and_run_uses_persistent_storage(tmp_path, monkeypatch):
+    app = desktop.DesktopApp()
+    app.window = FakeWindow()
+    monkeypatch.setattr(app, "start_server", lambda config: "http://127.0.0.1:19999/")
+    app.open_library(tmp_path / "config.toml", welcome=True)
+    assert app.window.loaded_urls == []  # 先让 use_home 返回给首次设置页，再异步跳转
+    assert app.window.loaded_event.wait(timeout=2)
+    assert app.window.loaded_urls == ["http://127.0.0.1:19999/settings?welcome=1"]
+
+    started = {}
+    monkeypatch.setattr(apphome, "settings_file", lambda: tmp_path / "appdata" / "settings.json")
+    monkeypatch.setattr(webview, "create_window", lambda *args, **kwargs: FakeWindow())
+    monkeypatch.setattr(webview, "start", lambda **kwargs: started.update(kwargs))
+    desktop.DesktopApp().run(None)
+    assert started["private_mode"] is False
+    assert started["storage_path"] == str(tmp_path / "appdata" / "webview")
+
+
 def test_setup_page_and_find_library(tmp_path, monkeypatch, example_config):
     html = desktop.setup_page()
     assert "新建书库" in html and "使用已有的书库" in html and "--paper" in html  # 样式直接嵌入
@@ -93,16 +141,23 @@ def test_setup_page_and_find_library(tmp_path, monkeypatch, example_config):
     assert desktop.find_library(example_config) == example_config.resolve()
 
 
-def test_server_thread_serves_and_close_asks_about_jobs(example_config, monkeypatch):
+def test_server_thread_serves_and_close_asks_about_jobs(example_config, monkeypatch, capsys):
     cfg = load_config(example_config)
     app = desktop.DesktopApp()
     assert app.confirm_close()  # 还没打开书库
     server = desktop.ServerThread(create_app(cfg))
+    assert server.server.config.get_loop_factory() is asyncio.SelectorEventLoop
     app.server = server
     url = server.start()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 不走系统代理
     with opener.open(url, timeout=10) as response:
         assert response.status == 200 and "课程书架" in response.read().decode("utf-8")
+    # 模拟 WebView2 导航或关窗时强制 RST 断开本机连接，不应触发 Proactor 的 WinError 10054 噪音
+    port = server.socket.getsockname()[1]
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+        raw.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        raw.recv(64)
+        raw.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("hh", 1, 0))
     assert app.confirm_close()  # 没有后台任务时直接关
     with Library(cfg.data_dir / "lecture.db") as library:
         JobStore(library).add(library.add_course("病毒学", CourseSettings()), "rebuild", {})
@@ -111,6 +166,7 @@ def test_server_thread_serves_and_close_asks_about_jobs(example_config, monkeypa
     assert not app.confirm_close() and "还有 1 个后台任务没有完成" in questions[0] and "全部继续" in questions[0]
     server.stop()
     assert not server.thread.is_alive()
+    assert "ConnectionResetError" not in capsys.readouterr().err
     with Library(cfg.data_dir / "lecture.db") as library:
         store = JobStore(library)
         assert store.active_jobs() == [] and "关闭" in store.paused_jobs()[0].progress  # 没做完的任务标为已暂停

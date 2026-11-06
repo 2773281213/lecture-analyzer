@@ -19,8 +19,9 @@ import threading
 import time
 import traceback
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from . import apphome
 from .books import VIDEO_SUFFIXES
@@ -35,6 +36,7 @@ ICON = Path(__file__).parent / "web" / "static" / "app.ico"
 AUDIO_SUFFIXES = {".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".opus", ".wma"}
 ARCHIVE_SUFFIXES = {".zip", ".rar", ".7z"}
 SERVER_START_SECONDS = 30
+T = TypeVar("T")
 
 
 def _filter(label: str, suffixes: set[str]) -> tuple[str, str]:
@@ -129,7 +131,8 @@ class ServerThread:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.bind(("127.0.0.1", 0))
         self.url = f"http://127.0.0.1:{self.socket.getsockname()[1]}/"
-        self.server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+        # Windows 默认的 ProactorEventLoop 在浏览器断开本机连接时会向 stderr 打印 WinError 10054；网页服务只处理 TCP，用 SelectorEventLoop
+        self.server = uvicorn.Server(uvicorn.Config(app, log_level="warning", loop="asyncio:SelectorEventLoop"))
         self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [self.socket]}, name="lec-web",
                                        daemon=True)
 
@@ -158,6 +161,28 @@ class ServerThread:
 # ---------- 网页能调用的本机功能 ----------
 
 
+def _on_ui_thread(window: Any, call: Callable[[], T]) -> T:
+    """pywebview 在后台 MTA 线程里调用 JS 接口；WinForms 的文件对话框必须在界面的 STA 线程里打开，否则偶发崩溃。"""
+    native = getattr(window, "native", None)
+    if native is None or not getattr(native, "InvokeRequired", False):
+        return call()
+    from System import Action  # type: ignore[import-not-found]
+
+    result: list[T] = []
+    failure: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            result.append(call())
+        except BaseException as exc:  # noqa: BLE001
+            failure.append(exc)
+
+    native.Invoke(Action(run))
+    if failure:
+        raise failure[0]
+    return result[0]
+
+
 class DesktopApi:
     """网页通过 window.pywebview.api 调用的本机功能：选文件、打开文件夹、首次设置。
 
@@ -173,10 +198,13 @@ class DesktopApi:
 
         window = self._app.window
         if mode == "folder":
-            chosen = window.create_file_dialog(webview.FileDialog.FOLDER)
+            chosen = _on_ui_thread(window, lambda: window.create_file_dialog(webview.FileDialog.FOLDER))
         elif mode in ("files", "file"):
-            chosen = window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=mode == "files",
-                                               file_types=FILE_TYPES.get(types, ()))
+            file_types = FILE_TYPES.get(types, ())
+            chosen = _on_ui_thread(
+                window, lambda: window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=mode == "files",
+                                                          file_types=file_types)
+            )
         else:
             return []
         return [str(path) for path in chosen or ()]
@@ -240,9 +268,13 @@ class DesktopApp:
         return self.server.start()
 
     def open_library(self, config: Path, welcome: bool) -> None:
-        """首次设置完成：启动网页服务，窗口转到书架（新建的书库先到设置页）。"""
-        url = self.start_server(config)
-        self.window.load_url(url + ("settings?welcome=1" if welcome else ""))
+        """首次设置完成：启动网页服务，窗口转到书架（新建的书库先到设置页）。
+
+        延后一点再跳转：让 use_home 先把返回值送回首次设置页，免得页面已换掉、pywebview 找不到回调而报错。"""
+        url = self.start_server(config) + ("settings?welcome=1" if welcome else "")
+        timer = threading.Timer(0.05, self.window.load_url, args=(url,))
+        timer.daemon = True
+        timer.start()
 
     def confirm_close(self) -> bool:
         """关窗前：还有没结束的后台任务时先确认；返回 False 表示不关。"""
@@ -264,8 +296,9 @@ class DesktopApp:
         else:
             self.window = webview.create_window(WINDOW_TITLE, html=setup_page(), **options)
         self.window.events.closing += self.confirm_close
+        storage = apphome.settings_file().parent / "webview"  # 固定目录：不用无痕临时目录，避免关窗时删目录竞态报错
         try:
-            webview.start(icon=str(ICON) if ICON.is_file() else None)
+            webview.start(icon=str(ICON) if ICON.is_file() else None, private_mode=False, storage_path=str(storage))
         finally:
             if self.server is not None:
                 self.server.stop()
