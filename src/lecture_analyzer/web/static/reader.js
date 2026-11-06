@@ -1,5 +1,5 @@
 // 讲的阅读页：一讲可以由多节音视频组成，按整讲时间统一跳转、连续播放，多节的讲用一条整讲进度条；
-// 播放时高亮当前转写句；地址带 ?t=毫秒 时打开页面即定位到该时间（跨讲的联系用它跳转）；渲染公式
+// 播放时高亮当前转写句和正在讲的知识点、更新时间轴；地址带 ?t=毫秒 时打开页面即定位到该时间（跨讲的联系用它跳转）；渲染公式
 (() => {
   const player = document.getElementById("player");
   const dataTag = document.getElementById("parts-data");
@@ -69,18 +69,59 @@
     current?.classList.remove("is-current");
     line?.classList.add("is-current");
     current = line;
+    // 右栏的转写：开着「跟随播放」、转写页签可见时，把当前句滚到上三分之一处
     const box = line?.closest(".lines");
-    if (line && box && box.closest("details")?.open) {
+    const follow = document.getElementById("follow-playback");
+    if (line && box && box.offsetParent !== null && (!follow || follow.checked)) {
       box.scrollTo({ top: line.offsetTop - box.clientHeight / 3, behavior: "smooth" });
     }
   };
+
+  // 时间轴（右栏播放器下方）：播放位置、当前知识点的色条；点击跳到对应时间
+  const timeline = document.getElementById("timeline");
+  const total = timeline ? Number(timeline.dataset.total) : 0;
+  const fill = timeline?.querySelector(".tl-fill");
+  const head = timeline?.querySelector(".tl-head");
+  const kpCards = Array.from(document.querySelectorAll(".kp-card[data-start]"));
+  let playingKp = null;
+
+  const showProgress = (ms) => {
+    if (total && fill && head) {
+      const percent = Math.min(100, Math.max(0, (100 * ms) / total));
+      fill.style.width = percent + "%";
+      head.style.left = percent + "%";
+    }
+    // 正在播放的知识点：笔记卡片、侧栏目录和时间轴上的色条一起标出
+    const card = kpCards.find((c) => Number(c.dataset.start) <= ms && ms < Number(c.dataset.end)) || null;
+    const kp = card ? card.dataset.kp : null;
+    if (kp === playingKp) return;
+    playingKp = kp;
+    document.querySelectorAll(".kp-card.is-playing, .side-sub.is-playing, .tl-band.is-on").forEach((el) => {
+      el.classList.remove("is-playing", "is-on");
+    });
+    if (kp === null) return;
+    card.classList.add("is-playing");
+    document.querySelector(`.side-sub[data-kp="${kp}"]`)?.classList.add("is-playing");
+    document.querySelector(`.tl-band[data-kp="${kp}"]`)?.classList.add("is-on");
+  };
+
+  if (timeline && total) {
+    timeline.addEventListener("click", (event) => {
+      const rect = timeline.getBoundingClientRect();
+      const ms = Math.round(((event.clientX - rect.left) / rect.width) * total);
+      seek(Math.max(0, Math.min(total, ms)), true);
+      showProgress(ms);
+    });
+  }
 
   // 当前播放位置（整讲时间）
   const position = () => pending ?? parts[partIndex].offset + player.currentTime * 1000;
 
   if (player && parts.length) {
     player.addEventListener("timeupdate", () => {
-      if (lines.length) highlight(position());
+      const ms = position();
+      if (lines.length) highlight(ms);
+      showProgress(ms);
     });
     // 一节放完自动接着放下一节
     player.addEventListener("ended", () => {
@@ -92,6 +133,7 @@
     if (start !== null && /^\d+$/.test(start)) {
       seek(Number(start), false);
       highlight(Number(start));
+      showProgress(Number(start));
     }
   }
 

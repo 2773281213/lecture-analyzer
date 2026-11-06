@@ -1,21 +1,52 @@
 {% extends "base.html" %}
 {% from "_forms.html" import csrf_field %}
 {% block title %}设置 · 课程书架{% endblock %}
-{% block nav %}<span class="topbar-note">设置</span>{% endblock %}
+{% set nav = "settings" %}
+{% block side %}
+<div class="side-head"><b>设置</b></div>
+<nav class="side-nav" data-spy aria-label="设置">
+  <a class="side-item" href="#appearance"><svg class="i"><use href="#i-palette"/></svg><span>外观</span><em data-theme-name>{{ (THEMES | selectattr("id", "equalto", ui.theme) | first).full }}</em></a>
+  <a class="side-item" href="#models"><svg class="i"><use href="#i-key"/></svg><span>模型和密钥</span><em>{{ profiles | length }}</em></a>
+  <a class="side-item" href="#steps"><svg class="i"><use href="#i-list"/></svg><span>各步骤用的模型</span></a>
+  <a class="side-item" href="#asr"><svg class="i"><use href="#i-mic"/></svg><span>转写</span></a>
+  <a class="side-item" href="#general"><svg class="i"><use href="#i-sliders"/></svg><span>其他</span></a>
+  <a class="side-item" href="#costs"><svg class="i"><use href="#i-coin"/></svg><span>费用</span></a>
+</nav>
+<span class="grow"></span>
+<div class="side-sep"></div>
+<button type="button" class="side-item native-only" data-open-path="{{ home }}" style="border: 0; background: none; font: inherit; cursor: pointer; width: 100%"><svg class="i"><use href="#i-folder"/></svg><span style="text-align: left">打开书库文件夹</span></button>
+<p class="side-note" style="word-break: break-all">书库：{{ home }}</p>
+{% endblock %}
 {% block body %}
 <main class="course-page settings">
   <header class="book-head">
     <p class="eyebrow">书库：{{ home }}</p>
     <h1>设置</h1>
-    <p class="head-actions">
-      <a class="pill" href="#models">模型和密钥</a>
-      <a class="pill" href="#steps">各步骤用的模型</a>
-      <a class="pill" href="#asr">转写</a>
-      <a class="pill" href="#general">其他</a>
-      <a class="pill" href="#costs">费用</a>
-      <button type="button" class="pill native-only" data-open-path="{{ home }}">打开书库文件夹</button>
-    </p>
   </header>
+
+  <section class="block" id="appearance">
+    <h2>外观</h2>
+    <p class="muted small">六种主题的布局完全相同，只换配色、字体和质感。选择保存在这台电脑上，下次打开书架照样生效；也可以随时点左下角的「主题」切换。</p>
+    <div class="theme-cards" role="radiogroup" aria-label="主题">
+      {% for t in THEMES %}
+      <button type="button" class="theme-card" role="radio" aria-checked="{{ 'true' if t.id == ui.theme else 'false' }}" data-set-theme="{{ t.id }}" data-name="{{ t.full }}">
+        <span class="tp" data-theme="{{ t.id }}" aria-hidden="true">
+          <i class="tp-rail"></i>
+          <span class="tp-side"><i></i><i class="on"></i><i></i><i></i></span>
+          <span class="tp-main"><i class="h"></i><i></i><i class="card"></i><i class="card"></i><i class="btn"></i></span>
+          <span class="tp-insp"><i class="on"></i><i></i><i></i><i></i></span>
+          <i class="tp-status"></i>
+        </span>
+        <b>{{ t.full }}<small>{{ t.en }}</small></b>
+        <p>{{ t.desc }}</p>
+      </button>
+      {% endfor %}
+    </div>
+    <div class="appearance-options">
+      <label class="toggle-row"><span>系统深色模式时用「夜读」<small>Windows 切到深色模式时自动换成夜读主题，切回浅色时恢复上面选的主题</small></span><input type="checkbox" class="switch" data-pref="autodark"{{ " checked" if ui.autodark }}></label>
+      <label class="toggle-row"><span>毛玻璃效果<small>只影响「极光」主题；电脑较慢、滚动不流畅时可以关掉</small></span><input type="checkbox" class="switch" data-pref="glass"{{ " checked" if ui.glass }}></label>
+    </div>
+  </section>
 
   {% if welcome %}
   <div class="notice">

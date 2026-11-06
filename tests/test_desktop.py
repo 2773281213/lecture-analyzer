@@ -132,7 +132,7 @@ def test_open_library_defers_navigation_until_after_return_and_run_uses_persiste
 
 def test_setup_page_and_find_library(tmp_path, monkeypatch, example_config):
     html = desktop.setup_page()
-    assert "新建书库" in html and "使用已有的书库" in html and "--paper" in html  # 样式直接嵌入
+    assert "新建书库" in html and "使用已有的书库" in html and "--main-bg" in html  # 样式直接嵌入
     assert str(apphome.default_home()) in html
     empty = tmp_path / "别处"
     empty.mkdir()

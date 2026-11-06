@@ -1,9 +1,11 @@
 {% extends "base.html" %}
 {% from "_forms.html" import csrf_field, state_chip %}
+{% from "_nav.html" import course_side %}
+{% set nav = "jobs" %}
 {% block title %}{{ job.label }} · 课程书架{% endblock %}
-{% block nav %}{% if course %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a>{% endif %}<span class="topbar-note">· 后台任务</span>{% endblock %}
+{% block side %}{% if course %}{{ course_side(course) }}{% endif %}{% endblock %}
 {% block body %}
-<main class="course-page" style="--spine: {{ spine }}">
+<main class="course-page"{% if course %} style="--spine: {{ spine_var(course.id) }}"{% endif %}>
   <header class="book-head">
     <p class="eyebrow">{% if course %}{{ course.name }} · {% endif %}任务 #{{ job.id }}</p>
     <h1>{{ job.label }}</h1>

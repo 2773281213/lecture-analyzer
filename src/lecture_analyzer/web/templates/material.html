@@ -7,9 +7,11 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMath()"></script>
 {% endblock %}
 {% from "_forms.html" import csrf_field %}
-{% block nav %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 课程资料</span>{% endblock %}
+{% from "_nav.html" import course_side %}
+{% set nav = "material" %}
+{% block side %}{{ course_side(course, active="materials") }}{% endblock %}
 {% block body %}
-<main class="course-page" style="--spine: {{ spine }}">
+<main class="course-page" style="--spine: {{ spine_var(course.id) }}">
   <header class="book-head">
     <p class="eyebrow">{{ material.kind_label }} · 编号 {{ material.id }}</p>
     <h1>{{ material.title }}</h1>

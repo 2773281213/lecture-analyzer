@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% from "_nav.html" import course_side %}
+{% set nav = "review" %}
 {% block title %}{{ course.name }} 总复习 · 课程书架{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -6,32 +8,37 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMath()"></script>
 {% endblock %}
-{% block nav %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 总复习</span>{% endblock %}
+{% block side %}
+{% call course_side(course, active="review") %}
+<p class="side-group"><span>章节</span></p>
+<ol class="side-toc" data-spy>
+  {% for chapter in chapters %}
+  <li><a href="#ch-{{ loop.index }}">{{ chapter.chapter }}</a>
+    <ol>{% for entry in chapter.entries %}<li{% if entry.priority != 3 %} class="toc-rest"{% endif %}><a href="#k-{{ entry.key }}">{{ entry.name }}</a></li>{% endfor %}</ol>
+  </li>
+  {% endfor %}
+</ol>
+{% endcall %}
+{% endblock %}
+{% block toolbar %}
+<header class="page-toolbar">
+  <div><span class="crumb"><a href="/courses/{{ course.id }}">{{ course.name }}</a> › 总复习</span><h1>{{ course.name }} · 总复习</h1></div>
+  <span class="grow"></span>
+  <span class="meta-inline">已复习 {{ kp_reviewed }}/{{ kp_total }}</span>
+  <nav class="seg" aria-label="显示范围">
+    <a class="{{ 'is-active' if not focus }}" href="/courses/{{ course.id }}/review">全部</a>
+    <a class="{{ 'is-active' if focus }}" href="/courses/{{ course.id }}/review?focus=1">只看重点</a>
+  </nav>
+</header>
+{% endblock %}
 {% block body %}
-<div class="reader" style="--spine: {{ spine }}">
-  <aside class="toc">
-    <p class="toc-label">章节</p>
-    <ol>
-      {% for chapter in chapters %}
-      <li><a href="#ch-{{ loop.index }}">{{ chapter.chapter }}</a>
-        <ol>{% for entry in chapter.entries %}<li{% if entry.priority != 3 %} class="toc-rest"{% endif %}><a href="#k-{{ entry.key }}">{{ entry.name }}</a></li>{% endfor %}</ol>
-      </li>
-      {% endfor %}
-    </ol>
-  </aside>
-
-  <main class="page" lang="{{ course.settings.html_lang }}">
-    <header class="book-head">
-      <p class="eyebrow"><a href="/courses/{{ course.id }}">{{ course.name }}</a> · 总复习</p>
-      <h1>{{ course.name }} · 总复习</h1>
+<div style="--spine: {{ spine_var(course.id) }}">
+  <main class="course-page" lang="{{ course.settings.html_lang }}">
+    <header class="page-intro">
       <p class="meta">
         已复习 {{ kp_reviewed }}/{{ kp_total }} 个知识点（重点 {{ key_reviewed }}/{{ key_total }}）
         · 重要程度由老师的考点信号计算：★★★ 提示考试或明确划重点，★★ 强调、易错或多次讲到
         · 每章只展开 ★★★ 必考知识点，其余折叠在章末
-      </p>
-      <p class="head-actions">
-        <a class="pill{{ ' is-active' if not focus }}" href="/courses/{{ course.id }}/review">全部</a>
-        <a class="pill{{ ' is-active' if focus }}" href="/courses/{{ course.id }}/review?focus=1">只看重点</a>
       </p>
       {% if not generated %}
       <form method="post" action="/courses/{{ course.id }}/review/generate" class="notice form-actions">
@@ -68,3 +75,4 @@
   </main>
 </div>
 {% endblock %}
+{% block status %}总复习 · 已复习 {{ kp_reviewed }}/{{ kp_total }} 个知识点（重点 {{ key_reviewed }}/{{ key_total }}）{% endblock %}

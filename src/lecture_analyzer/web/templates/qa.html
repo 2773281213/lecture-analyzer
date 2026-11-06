@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% from "_forms.html" import csrf_field %}
 {% from "_evidence.html" import evidence_item %}
+{% from "_nav.html" import course_side %}
+{% set nav = "qa" %}
 {% block title %}提问 · {{ course.name }} · 课程书架{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -8,24 +10,24 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMath()"></script>
 {% endblock %}
-{% block nav %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 提问</span>{% endblock %}
+{% block side %}
+{% call course_side(course, active="qa") %}
+<p class="side-group"><span>对话</span><a href="/courses/{{ course.id }}/qa" title="开始新对话">＋ 新对话</a></p>
+<ol class="side-threads">
+  {% for t in threads %}
+  <li class="{{ 'is-active' if t.thread == thread }}">
+    <a href="/courses/{{ course.id }}/qa?thread={{ t.thread }}">{{ t.first_question | truncate(40, true) }}</a>
+    <span>{{ t.turns }} 问 · {{ t.updated_at[:10] }}</span>
+  </li>
+  {% else %}
+  <li><span>还没有对话</span></li>
+  {% endfor %}
+</ol>
+{% endcall %}
+{% endblock %}
 {% block body %}
-<div class="qa-layout" style="--spine: {{ spine }}">
-  <aside class="qa-threads">
-    <a class="button" href="/courses/{{ course.id }}/qa">新对话</a>
-    <ol>
-      {% for t in threads %}
-      <li class="{{ 'is-active' if t.thread == thread }}">
-        <a href="/courses/{{ course.id }}/qa?thread={{ t.thread }}">{{ t.first_question | truncate(40, true) }}</a>
-        <span class="muted small">{{ t.turns }} 问 · {{ t.updated_at[:10] }}</span>
-      </li>
-      {% else %}
-      <li class="muted small">还没有对话</li>
-      {% endfor %}
-    </ol>
-  </aside>
-
-  <main class="qa-main">
+<div style="--spine: {{ spine_var(course.id) }}">
+  <main class="course-page qa-main">
     <header class="book-head">
       <p class="eyebrow">{{ course.name }} · 依据这门课的录音、笔记和资料回答，每处依据都附出处</p>
       <h1>{{ (turns[0].question | truncate(60, true)) if turns else "提问" }}</h1>

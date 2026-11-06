@@ -228,6 +228,7 @@ def lecture_view(library: Library, lecture: Lecture) -> dict[str, Any]:
         "references": _references(memory, lecture, notes, data),
         "memory_state": lecture.step_state("integrate"),
         "tags": library.tags(lecture.id),
+        "siblings": library.lectures(course),  # 侧栏的上一讲 / 下一讲和讲次列表
         "other_courses": [c for c in library.courses() if c.id != course.id],
         "active_jobs": JobStore(library).active_jobs(course),
         "page_materials": MaterialStore(library).list(course, PAGE_KINDS),

@@ -1,0 +1,25 @@
+{# 课程相关页面的侧栏：返回书架、课程名、课程的各个部分。
+   active：当前所在的部分（chapters / materials / exam-plan / analysis / knowledge / review / qa / settings）；
+   here：就在课程页上时用页内锚点（滚动时由 app.js 标出当前部分）；counts：课程页才有的计数。 #}
+{% macro course_side(course, active="", here=false, counts=none) -%}
+{% set base = "" if here else "/courses/" ~ course.id %}
+{% set c = counts or {} %}
+<a class="side-back" href="/"><svg class="i"><use href="#i-left"/></svg>全部课程</a>
+<a class="side-title" href="/courses/{{ course.id }}" style="--c: {{ spine_var(course.id) }}" title="{{ course.name }}"><i class="dot"></i><span>{{ course.name }}</span></a>
+<p class="side-note">{{ course.settings.subject }}{% if course.settings.subject %} · {% endif %}{{ course.settings.teaching_description }}</p>
+<nav class="side-nav"{{ " data-spy" if here }} aria-label="这门课">
+  <a class="side-item{{ ' is-on' if active == 'chapters' }}" href="{{ base }}#chapters"><svg class="i"><use href="#i-list"/></svg><span>讲次</span>{% if c.lectures is defined %}<em>{{ c.lectures }}</em>{% endif %}</a>
+  <a class="side-item{{ ' is-on' if active == 'materials' }}" href="{{ base }}#materials"><svg class="i"><use href="#i-file"/></svg><span>课程资料</span>{% if c.materials is defined %}<em>{{ c.materials }}</em>{% endif %}</a>
+  <a class="side-item{{ ' is-on' if active == 'exam-plan' }}" href="{{ base }}#exam-plan"><svg class="i"><use href="#i-target"/></svg><span>考试方案</span><em class="{{ {'confirmed': 'ok', 'draft': 'warn'}.get(course.exam_plan, '') }}">{{ EXAM_PLAN_LABELS[course.exam_plan] }}</em></a>
+  <a class="side-item{{ ' is-on' if active == 'analysis' }}" href="{{ base }}#analysis"><svg class="i"><use href="#i-chart"/></svg><span>考前分析</span>{% if c.reports is defined %}<em>{{ c.reports }} 份报告</em>{% endif %}</a>
+  <a class="side-item{{ ' is-on' if active == 'knowledge' }}" href="{{ base }}#knowledge"><svg class="i"><use href="#i-layers"/></svg><span>知识点体系</span>{% if c.kp_total is defined %}<em>{{ c.kp_total }}</em>{% endif %}</a>
+  <div class="side-sep"></div>
+  <a class="side-item{{ ' is-on' if active == 'review' }}" href="/courses/{{ course.id }}/review"><svg class="i"><use href="#i-star"/></svg><span>总复习</span>{% if c.kp_total %}<em>{{ c.kp_reviewed }}/{{ c.kp_total }}</em>{% endif %}</a>
+  <a class="side-item{{ ' is-on' if active == 'qa' }}" href="/courses/{{ course.id }}/qa"><svg class="i"><use href="#i-chat"/></svg><span>提问</span></a>
+</nav>
+{{ caller() if caller is defined else "" }}
+<span class="grow"></span>
+<div class="side-sep"></div>
+<a class="side-item{{ ' is-on' if active == 'settings' }}" href="/courses/{{ course.id }}/settings"><svg class="i"><use href="#i-sliders"/></svg><span>课程设置</span></a>
+<a class="side-item" href="/api/courses/{{ course.id }}" title="这门课的全部笔记和知识点（JSON）"><svg class="i"><use href="#i-code"/></svg><span>导出 book.json</span></a>
+{%- endmacro %}

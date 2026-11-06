@@ -1,9 +1,11 @@
 {% extends "base.html" %}
 {% from "_forms.html" import csrf_field %}
+{% from "_nav.html" import course_side %}
+{% set nav = "course-settings" if course else "shelf" %}
 {% block title %}{{ ("课程设置 · " ~ course.name) if course else "新建课程" }} · 课程书架{% endblock %}
-{% block nav %}{% if course %}<a class="topbar-note" href="/courses/{{ course.id }}">{{ course.name }}</a><span class="topbar-note">· 课程设置</span>{% else %}<span class="topbar-note">新建课程</span>{% endif %}{% endblock %}
+{% block side %}{% if course %}{{ course_side(course, active="settings") }}{% endif %}{% endblock %}
 {% block body %}
-<main class="course-page" style="--spine: {{ spine }}">
+<main class="course-page"{% if course %} style="--spine: {{ spine_var(course.id) }}"{% endif %}>
   <header class="book-head">
     <p class="eyebrow">{{ course.name if course else "一门课是一本书，一讲是书里的一章" }}</p>
     <h1>{{ "课程设置" if course else "新建课程" }}</h1>

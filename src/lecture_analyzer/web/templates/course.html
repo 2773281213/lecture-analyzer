@@ -1,32 +1,50 @@
 {% extends "base.html" %}
 {% from "_forms.html" import csrf_field, paths_field, force_select, jobs_panel, state_chip, models_notice %}
+{% from "_nav.html" import course_side %}
+{% set nav = "course" %}
 {% block title %}{{ course.name }} · 课程书架{% endblock %}
-{% block nav %}<span class="topbar-note">{{ course.name }}</span>{% endblock %}
-{% block body %}
-<main class="course-page" style="--spine: {{ spine }}">
-  <header class="book-head">
-    <p class="eyebrow">{{ course.settings.subject }} · {{ course.settings.teaching_description }} · 笔记：{{ course.settings.note_language_name }}</p>
+
+{# 右栏默认选中的讲：先找正在处理、失败或待更新的，没有就选第一讲 #}
+{% macro selected_lecture() -%}
+{%- set ns = namespace(sel=none) -%}
+{%- for lecture, state, tags in lectures -%}{%- if ns.sel is none and state[0] in ("running", "failed", "stale") -%}{%- set ns.sel = lecture.id -%}{%- endif -%}{%- endfor -%}
+{%- if ns.sel is none and lectures -%}{%- set ns.sel = lectures[0][0].id -%}{%- endif -%}
+{{ ns.sel }}
+{%- endmacro %}
+
+{% block side %}
+{{ course_side(course, here=true, counts={"lectures": all_lectures | length, "materials": materials | length, "reports": reports | length,
+                                      "kp_total": kp_total, "kp_reviewed": kp_reviewed}) }}
+{% endblock %}
+
+{% block toolbar %}
+<header class="page-toolbar" style="--spine: {{ spine_var(course.id) }}">
+  <div>
+    <span class="crumb"><a href="/">全部课程</a>{% if course.settings.subject %} › {{ course.settings.subject }}{% endif %}</span>
     <h1>{{ course.name }}</h1>
+  </div>
+  <span class="grow"></span>
+  <a class="button button-quiet" href="/courses/{{ course.id }}/review"><svg class="i"><use href="#i-star"/></svg>总复习</a>
+  <a class="button button-quiet" href="/courses/{{ course.id }}/qa"><svg class="i"><use href="#i-chat"/></svg>提问</a>
+  <a class="button" href="#add-lecture" data-open-details="add-lecture"><svg class="i"><use href="#i-plus"/></svg>添加一讲</a>
+</header>
+{% endblock %}
+
+{% block body %}
+{% set sel = selected_lecture() | trim %}
+<main class="course-page" style="--spine: {{ spine_var(course.id) }}">
+  <header class="page-intro">
     <p class="meta">
-      {{ lectures | length }} 讲{% if total_ms %} · 共 {{ total_ms | ts }}{% endif %}
+      {{ course.settings.teaching_description }} · 笔记：{{ course.settings.note_language_name }}
+      · {{ lectures | length }} 讲{% if total_ms %} · 共 {{ total_ms | ts }}{% endif %}
       · 知识点 {{ kp_total }} 个 · 已复习 {{ kp_reviewed }}/{{ kp_total }}（重点 {{ key_reviewed }}/{{ key_total }}）
-    </p>
-    <p class="head-actions">
-      <a class="button" href="/courses/{{ course.id }}/review">总复习</a>
-      <a class="button" href="/courses/{{ course.id }}/qa">提问</a>
-      <a class="pill" href="#exam-plan">考试方案</a>
-      <a class="pill" href="#add-lecture">添加一讲</a>
-      <a class="pill" href="#analysis">考前分析</a>
-      <a class="pill" href="#materials">课程资料</a>
-      <a class="pill" href="/courses/{{ course.id }}/settings">课程设置</a>
-      <a class="pill" href="/api/courses/{{ course.id }}">book.json</a>
     </p>
     {% if all_lectures %}
     <div class="head-actions">
       <form method="post" action="/courses/{{ course.id }}/run" class="inline-form" title="接着处理：只处理没完成的讲；从某一步起重做：这门课的全部讲都重做">
         {{ csrf_field() }}
         {{ force_select() }}
-        <button class="button button-quiet">处理全部讲</button>
+        <button class="button button-quiet"><svg class="i"><use href="#i-history"/></svg>处理全部讲</button>
       </form>
       <form method="post" action="/courses/{{ course.id }}/rebuild" class="inline-form">
         {{ csrf_field() }}
@@ -53,35 +71,47 @@
   </div>
   {% endif %}
 
-  {% include "_exam_plan.html" %}
-
   <section class="block" id="chapters">
-    <h2>目录</h2>
-    {% if all_tags %}
-    <nav class="tag-filter" aria-label="按标签筛选">
-      <a class="pill{{ ' is-active' if not active_tag }}" href="/courses/{{ course.id }}">全部</a>
-      {% for t in all_tags %}<a class="pill{{ ' is-active' if t == active_tag }}" href="/courses/{{ course.id }}?tag={{ t | urlencode }}">{{ t }}</a>{% endfor %}
-    </nav>
-    {% endif %}
-    <ol class="chapter-list">
-      {% for lecture, state, tags in lectures %}
-      <li>
-        <a class="chapter-link" href="/lectures/{{ lecture.id }}">
-          <span class="chapter-seq">第 {{ lecture.seq }} 讲</span>
-          <span class="chapter-title">{{ lecture.title or "（标题待生成）" }}</span>
-        </a>
-        <span class="chapter-meta">
-          {% if lecture.duration_ms %}{{ lecture.duration_ms | ts }}{% else %}时长未知{% endif %}
-          {% if lecture.parts | length > 1 %} · {{ lecture.parts | length }} 节{% endif %}
-          · {{ KIND_LABELS.get(lecture.kind, lecture.kind) }}{% if lecture.date %} · {{ lecture.date }}{% endif %}
-          {% for t in tags %}<span class="tag">{{ t }}</span>{% endfor %}
-          <span class="chip state-{{ state[0] }}">{{ state[1] }}</span>
-        </span>
-      </li>
-      {% else %}
-      <li class="muted">{{ "没有带这个标签的讲" if active_tag else "这门课还没有讲：在下面添加第一讲" }}</li>
-      {% endfor %}
-    </ol>
+    <h2>讲次 <span class="count">{{ all_lectures | length }} 讲</span></h2>
+    {% set state_counts = {} %}
+    {% for lecture, state, tags in lectures %}{% set _ = state_counts.update({state[0]: state_counts.get(state[0], 0) + 1}) %}{% endfor %}
+    <div class="filter-bar">
+      {% if lectures %}
+      <div class="seg" role="group" aria-label="按状态筛选" data-state-filter>
+        <button type="button" data-state="" aria-pressed="true">全部 {{ lectures | length }}</button>
+        {% for key, label in [("done", "已上架"), ("running", "处理中"), ("pending", "待处理"), ("stale", "待更新"), ("failed", "失败")] %}
+        {% if state_counts.get(key) %}<button type="button" data-state="{{ key }}" aria-pressed="false">{{ label }} {{ state_counts[key] }}</button>{% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+      <span class="grow"></span>
+      {% if all_tags %}
+      <nav class="tag-filter" aria-label="按标签筛选" style="margin: 0">
+        <a class="pill{{ ' is-active' if not active_tag }}" href="/courses/{{ course.id }}">全部标签</a>
+        {% for t in all_tags %}<a class="pill{{ ' is-active' if t == active_tag }}" href="/courses/{{ course.id }}?tag={{ t | urlencode }}">{{ t }}</a>{% endfor %}
+      </nav>
+      {% endif %}
+    </div>
+    <div class="table-frame">
+      <table class="table lecture-table" id="lecture-table">
+        <thead><tr><th>#</th><th>标题</th><th>类型</th><th>日期</th><th>时长</th><th>状态</th>{% if all_tags %}<th>标签</th>{% endif %}</tr></thead>
+        <tbody>
+        {% for lecture, state, tags in lectures %}
+        <tr data-select="lecture-{{ lecture.id }}" data-state="{{ state[0] }}"{{ ' class="is-selected"' | safe if lecture.id | string == sel }}>
+          <td class="num">{{ lecture.seq }}</td>
+          <td><a class="ltitle{{ ' is-pending' if not lecture.title }}" href="/lectures/{{ lecture.id }}">{{ lecture.title or "（标题待生成）" }}</a>{% if lecture.parts | length > 1 %} <small style="display: inline">· {{ lecture.parts | length }} 节</small>{% endif %}</td>
+          <td style="white-space: nowrap">{{ KIND_LABELS.get(lecture.kind, lecture.kind) }}</td>
+          <td class="num{{ ' muted-cell' if not lecture.date }}">{{ lecture.date or "—" }}</td>
+          <td class="num{{ ' muted-cell' if not lecture.duration_ms }}">{{ (lecture.duration_ms | ts) if lecture.duration_ms else "—" }}</td>
+          <td style="white-space: nowrap"><span class="st state-{{ state[0] }}">{{ state[1] }}</span></td>
+          {% if all_tags %}<td><span class="tags">{% for t in tags %}<span class="tag">{{ t }}</span>{% endfor %}</span></td>{% endif %}
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="muted">{{ "没有带这个标签的讲" if active_tag else "这门课还没有讲：在下面添加第一讲" }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
     <details class="form-card" id="add-lecture"{{ " open" if not all_lectures }}>
       <summary class="form-summary">添加一讲</summary>
@@ -106,8 +136,7 @@
   </section>
 
   <section class="block" id="materials">
-    <h2>课程资料</h2>
-    <p class="meta">课件：{{ SLIDES_LABELS[course.slides] }}</p>
+    <h2>课程资料 <span class="count">课件：{{ SLIDES_LABELS[course.slides] }}</span></h2>
     {% if materials %}
     {% set can_delete = not busy_jobs %}
     {% if can_delete %}
@@ -169,6 +198,8 @@
     </details>
   </section>
 
+  {% include "_exam_plan.html" %}
+
   <section class="block" id="analysis">
     <h2>考前分析</h2>
     {% if not chapters %}
@@ -195,7 +226,7 @@
     </form>
     <form class="inline-form" method="post" action="/courses/{{ course.id }}/review/generate">
       {{ csrf_field() }}
-      <button class="button" type="submit">生成 / 更新总复习</button>
+      <button class="button button-quiet" type="submit">生成 / 更新总复习</button>
       <label class="check-label small"><input type="checkbox" name="all" value="1"> 所有章节都重新生成</label>
     </form>
     {% endif %}
@@ -215,7 +246,7 @@
   </section>
 
   <section class="block" id="knowledge">
-    <h2>知识点体系</h2>
+    <h2>知识点体系 <span class="count">{{ kp_total }} 个 · 已复习 {{ kp_reviewed }}</span></h2>
     {% if not chapters %}
     <p class="muted">课程记忆还没有建立：处理完至少一讲后会自动整合。</p>
     {% endif %}
@@ -242,3 +273,48 @@
 </main>
 {% include "_slides_gate.html" %}
 {% endblock %}
+
+{% block insp %}
+{% set sel = selected_lecture() | trim %}
+<div class="insp-scroll">
+  {% for lecture, state, tags in lectures %}
+  <section class="insp-panel" data-panel="lecture-{{ lecture.id }}" style="--c: {{ spine_var(course.id) }}"{% if lecture.id | string != sel %} hidden{% endif %}>
+    <div class="cover">
+      <small>第 {{ lecture.seq }} 讲 · {{ KIND_LABELS.get(lecture.kind, lecture.kind) }}{% if lecture.duration_ms %} · {{ lecture.duration_ms | ts }}{% endif %}{% if lecture.parts | length > 1 %} · {{ lecture.parts | length }} 节{% endif %}{% if lecture.date %} · {{ lecture.date }}{% endif %}</small>
+      <h3>{{ lecture.title or "（标题待生成）" }}</h3>
+      <div class="row">
+        <a class="button" href="/lectures/{{ lecture.id }}"><svg class="i"><use href="#i-book"/></svg>打开阅读</a>
+        {% if state[0] != "done" %}
+        <form method="post" action="/lectures/{{ lecture.id }}/run" class="inline-form">
+          {{ csrf_field() }}<input type="hidden" name="force" value="">
+          <button class="button button-quiet" title="只处理没完成的步骤">接着处理</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    <div class="isec">
+      <h4>处理流程 <span class="st state-{{ state[0] }}" style="margin-left: auto; font-weight: 400">{{ state[1] }}</span></h4>
+      <ol class="flow">
+        {% for step, label in RUN_STEPS %}
+        {% set info = lecture.status.get(step, {}) %}
+        {% set st = info.get("state") or "pending" %}
+        <li class="{{ st }}"><b>{{ label }}</b><span>{{ STATE_LABELS.get(st) or {"running": "进行中"}.get(st, "未开始") }}{% if info.get("detail") %} · {{ info.get("detail") }}{% endif %}</span></li>
+        {% endfor %}
+      </ol>
+    </div>
+    <div class="isec">
+      <h4>录音录像（{{ lecture.parts | length }} 节）</h4>
+      {% for part in lecture.parts %}<p class="mono">{{ part.media_path }}</p>{% endfor %}
+    </div>
+    {% if tags %}<div class="isec"><h4>标签</h4><p>{% for t in tags %}<span class="tag">{{ t }}</span> {% endfor %}</p></div>{% endif %}
+  </section>
+  {% else %}
+  <section class="insp-panel" style="--c: {{ spine_var(course.id) }}">
+    <div class="cover"><small>{{ course.settings.subject }}</small><h2>{{ course.name }}</h2></div>
+    <p class="insp-empty">{{ "没有带这个标签的讲。" if active_tag else "这门课还没有讲：在左边「添加一讲」里选择录音或录像，处理完成后这里会显示每一讲的处理流程。" }}</p>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block status %}{{ all_lectures | length }} 讲{% if total_ms %} · {{ total_ms | ts }}{% endif %} · 知识点 {{ kp_total }} · 已复习 {{ kp_reviewed }}/{{ kp_total }}{% endblock %}

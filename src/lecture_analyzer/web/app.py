@@ -49,6 +49,7 @@ from ..timecode import format_ms
 from . import actions, exam_plan_page, manage_courses, manage_lectures, qa_page, settings_page
 from .forms import take_flash
 from .rendering import cite_links, evidence_url, kp_url, render_markdown
+from .themes import DARK_THEME, THEMES, spine_var, ui_prefs
 from .views import (
     SORTS, course_view, job_view, jobs_view, lecture_state, lecture_view, material_view, report_view, review_view,
     shelf_books,
@@ -104,6 +105,7 @@ def _templates(csrf_token: str, db_path: Path) -> Jinja2Templates:
         RUN_STEPS=[(step, RUN_STEP_LABELS[step]) for step in STEPS], lecture_state=lecture_state,
         evidence_url=evidence_url, kp_url=kp_url, type_brief=type_brief, take_flash=take_flash, active_job_count=active_job_count,
         csrf_token=csrf_token, static_version=_static_version(),
+        THEMES=THEMES, DARK_THEME=DARK_THEME, ui_prefs=ui_prefs, spine_var=spine_var,
         quote_html=lambda quote, meaning="": Markup(quote_html(quote, meaning)),  # 内容已转义
     )
     templates.env.filters["zh_aliases"] = zh_aliases

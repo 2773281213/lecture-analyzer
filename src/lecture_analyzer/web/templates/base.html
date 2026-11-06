@@ -1,46 +1,137 @@
 <!doctype html>
-<html lang="zh-CN">
+{# 工作台骨架：导航栏（rail）+ 侧栏（side）+ 内容（main）+ 详情栏（insp）+ 状态栏。
+   页面用 block side / insp / toolbar / body / status 填内容；side、insp 没有内容时整列不显示。
+   页面在顶层 set nav = "shelf" / "course" / "lecture" / "review" / "qa" / "jobs" / "settings" 标出导航栏的当前项。 #}
+{% set ui = ui_prefs(request) %}
+{% set theme_info = THEMES | selectattr("id", "equalto", ui.theme) | first %}
+{% set flash = take_flash(request) %}
+{% set job_count = active_job_count() %}
+{% set has_side = self.side() | trim | length > 0 %}
+{% set has_insp = self.insp() | trim | length > 0 %}
+{% set in_course = course is defined and course %}
+<html lang="zh-CN" data-theme="{{ ui.theme }}" data-chosen="{{ ui.theme }}"{% if ui.autodark %} data-autodark{% endif %}{% if not ui.glass %} data-glass="off"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}课程书架{% endblock %}</title>
+  <script>
+    // 系统是深色模式、又开着「跟随系统」时换成夜读；放在最前面，页面不会先闪一下浅色
+    (function () {
+      var root = document.documentElement;
+      var dark = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+      window.lecApplyTheme = function () {
+        var auto = root.hasAttribute("data-autodark") && dark && dark.matches;
+        root.setAttribute("data-theme", auto ? "{{ DARK_THEME }}" : root.getAttribute("data-chosen"));
+      };
+      window.lecApplyTheme();
+      if (dark && dark.addEventListener) dark.addEventListener("change", window.lecApplyTheme);
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
   <link rel="icon" href="/static/app.ico?v={{ static_version }}">
   <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
   <script defer src="/static/app.js?v={{ static_version }}"></script>
   {% block head %}{% endblock %}
 </head>
 <body>
-  <nav class="topbar">
-    <a class="brand" href="/">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h6.5v6.5H4zM13.5 4H20v6.5h-6.5zM4 13.5h6.5V20H4zM13.5 13.5H20V20h-6.5z"/></symbol>
+  <symbol id="i-rows" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5zM5 19.5A1.5 1.5 0 0 0 6.5 21H19"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3.5l9 4.8-9 4.8-9-4.8zM3 13l9 4.8 9-4.8"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M4.2 7.4l2.3 1.3M17.5 15.3l2.3 1.3M4.2 16.6l2.3-1.3M17.5 8.7l2.3-1.3"/><circle cx="12" cy="12" r="7"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-1.2-1-1.6-1-2.6 0-.9.7-1.6 1.7-1.6h2.1a3.9 3.9 0 0 0 3.9-3.9C20.5 6.6 16.7 3.5 12 3.5z"/><circle cx="7.6" cy="11" r="1.1"/><circle cx="10.4" cy="7.4" r="1.1"/><circle cx="14.6" cy="7.6" r="1.1"/></symbol>
+  <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 20V11M12 20V4M19 20v-7"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.8l2.5 5.2 5.7.7-4.2 3.9 1.1 5.6L12 16.4l-5.1 2.8 1.1-5.6-4.2-3.9 5.7-.7z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3.5 12.3V4.5h7.8l9.2 9.2-7.8 7.8z"/><circle cx="8" cy="9" r="1.3"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l1-4.5L15.5 5a2.1 2.1 0 0 1 3 3L8 18.5zM13.5 7l3 3"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.3h4.3"/><path d="M12 8v4l2.8 1.8"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2.5 2.5"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></symbol>
+  <symbol id="i-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.3c-.5-.9-1.6-1.4-2.8-1.4-1.6 0-2.8.8-2.8 2s1.2 1.7 2.8 2 2.8.8 2.8 2-1.2 2-2.8 2c-1.3 0-2.4-.6-2.9-1.5M12 6.5v11"/></symbol>
+</svg>
+<div class="app{{ ' has-side' if has_side }}{{ ' has-insp' if has_insp }}{{ ' side-off' if has_side and not ui.side }} {% block app_class %}{% endblock %}" id="app">
+  <nav class="rail" aria-label="主导航">
+    <a class="rail-brand" href="/" title="课程书架" aria-label="课程书架">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16.2 5.3l3.8-1 3.1 15.5-3.9 1z"/></svg>
-      课程书架
     </a>
-    {% block nav %}{% endblock %}
-    <span class="topbar-spacer"></span>
-    {% set job_count = active_job_count() %}
-    <a class="topbar-link{{ ' is-busy' if job_count }}" href="/jobs" id="jobs-badge">后台任务<span class="badge-count" id="jobs-count"{% if not job_count %} hidden{% endif %}>{{ job_count }}</span></a>
-    <a class="topbar-link" href="/settings">设置</a>
+    <a class="rail-item{{ ' is-on' if nav == 'shelf' }}" href="/" title="书架：全部课程"><svg class="i"><use href="#i-grid"/></svg>书架</a>
+    {% if in_course %}
+    <a class="rail-item{{ ' is-on' if nav in ('course', 'lecture', 'material', 'report', 'course-settings') }}" href="/courses/{{ course.id }}" title="{{ course.name }}"><svg class="i"><use href="#i-book"/></svg>课程</a>
+    <a class="rail-item{{ ' is-on' if nav == 'review' }}" href="/courses/{{ course.id }}/review" title="{{ course.name }} · 总复习"><svg class="i"><use href="#i-layers"/></svg>复习</a>
+    <a class="rail-item{{ ' is-on' if nav == 'qa' }}" href="/courses/{{ course.id }}/qa" title="{{ course.name }} · 提问"><svg class="i"><use href="#i-chat"/></svg>提问</a>
+    {% endif %}
+    <a class="rail-item{{ ' is-on' if nav == 'jobs' }}{{ ' is-busy' if job_count }}" href="/jobs" id="jobs-badge" title="后台任务"><svg class="i"><use href="#i-activity"/></svg>任务<span class="badge-count" id="jobs-count"{% if not job_count %} hidden{% endif %}>{{ job_count }}</span></a>
+    <span class="grow"></span>
+    {% if has_side %}<button type="button" class="rail-item" id="side-toggle" title="显示 / 隐藏侧栏" aria-controls="side"><svg class="i"><use href="#i-sidebar"/></svg>侧栏</button>{% endif %}
+    <button type="button" class="rail-item" id="theme-button" title="切换主题" aria-haspopup="dialog" aria-expanded="false" aria-controls="theme-menu"><svg class="i"><use href="#i-palette"/></svg>主题</button>
+    <a class="rail-item{{ ' is-on' if nav == 'settings' }}" href="/settings" title="设置"><svg class="i"><use href="#i-gear"/></svg>设置</a>
   </nav>
-  {% set flash = take_flash(request) %}
-  {% if flash %}
-  <div class="flash flash-{{ flash.kind }}" role="status">
-    <span>{{ flash.message }}</span>
-    <button class="flash-close" type="button" aria-label="关闭提示" data-dismiss>×</button>
+  {% if has_side %}<aside class="side" id="side" aria-label="侧栏">{% block side %}{% endblock %}</aside>{% endif %}
+  <div class="main" id="main">
+    {% block toolbar %}{% endblock %}
+    {% if flash %}
+    <div class="flash flash-{{ flash.kind }}" role="status">
+      <span>{{ flash.message }}</span>
+      <button class="flash-close" type="button" aria-label="关闭提示" data-dismiss>×</button>
+    </div>
+    {% endif %}
+    {% block body %}{% endblock %}
   </div>
-  {% endif %}
-  {% block body %}{% endblock %}
-  <dialog class="viewer" id="page-viewer" aria-label="课件页面">
-    <form method="dialog" class="viewer-head">
-      <span id="viewer-title"></span>
-      <a id="viewer-open" href="#" target="_blank" rel="noopener">在新窗口打开</a>
-      <button class="icon-button" aria-label="关闭">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
-    </form>
-    <img id="viewer-image" alt="">
-  </dialog>
+  {% if has_insp %}<aside class="insp" id="insp" aria-label="详情">{% block insp %}{% endblock %}</aside>{% endif %}
+  <footer class="status">
+    <a class="status-job{{ ' is-idle' if not job_count }}" id="status-job" href="/jobs" title="后台任务">
+      <i class="spin" aria-hidden="true"></i><span id="status-job-text">{% if job_count %}{{ job_count }} 个后台任务进行中{% else %}没有进行中的后台任务{% endif %}</span>
+    </a>
+    <span class="grow"></span>
+    <span class="status-info">{% block status %}{% endblock %}</span>
+    <button type="button" class="status-theme" data-open-theme title="切换主题"><svg class="i" style="width:13px;height:13px"><use href="#i-palette"/></svg><span data-theme-name>{{ theme_info.full }}</span></button>
+  </footer>
+</div>
+
+<div class="theme-menu" id="theme-menu" role="dialog" aria-label="主题" hidden>
+  <h3>主题</h3>
+  <div role="radiogroup" aria-label="主题">
+    {% for t in THEMES %}
+    <button type="button" class="theme-option" role="radio" aria-checked="{{ 'true' if t.id == ui.theme else 'false' }}" data-set-theme="{{ t.id }}" data-name="{{ t.full }}">
+      <span class="swatch" aria-hidden="true">{% for c in t.dots %}<i style="background: {{ c }}"></i>{% endfor %}</span>
+      <span><b>{{ t.full }}</b><small>{{ t.en }}</small></span>
+      <svg class="i check" aria-hidden="true"><use href="#i-check"/></svg>
+    </button>
+    {% endfor %}
+  </div>
+  <hr>
+  <label class="toggle-row"><span>系统深色模式时用「夜读」<small>跟随 Windows 的深色设置自动切换</small></span><input type="checkbox" class="switch" data-pref="autodark"{{ " checked" if ui.autodark }}></label>
+  <label class="toggle-row"><span>毛玻璃效果<small>只影响「极光」，电脑较慢时可以关掉</small></span><input type="checkbox" class="switch" data-pref="glass"{{ " checked" if ui.glass }}></label>
+  <a class="menu-link" href="/settings#appearance">在设置页预览全部主题 ›</a>
+</div>
+
+<dialog class="viewer" id="page-viewer" aria-label="课件页面">
+  <form method="dialog" class="viewer-head">
+    <span id="viewer-title"></span>
+    <a id="viewer-open" href="#" target="_blank" rel="noopener">在新窗口打开</a>
+    <button class="icon-button" aria-label="关闭">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </form>
+  <img id="viewer-image" alt="">
+</dialog>
 </body>
 </html>

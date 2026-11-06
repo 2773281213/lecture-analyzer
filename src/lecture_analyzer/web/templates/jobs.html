@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_forms.html" import csrf_field, state_chip, models_notice %}
 {% block title %}后台任务 · 课程书架{% endblock %}
-{% block nav %}<span class="topbar-note">后台任务</span>{% endblock %}
+{% set nav = "jobs" %}
 {% block body %}
 <main class="course-page">
   <header class="book-head">

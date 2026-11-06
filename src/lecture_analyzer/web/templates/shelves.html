@@ -1,7 +1,40 @@
 {% extends "base.html" %}
-{% block nav %}<span class="topbar-note">{{ books | length }} 本书</span>{% endblock %}
+{% set nav = "shelf" %}
+{% set total_lectures = books | sum(attribute="lectures") %}
+{% set total_ms = books | sum(attribute="duration_ms") %}
+
+{% block side %}
+<div class="side-head"><b>课程书架</b><a class="icon-button" href="/courses/new" title="新建课程" aria-label="新建课程"><svg class="i"><use href="#i-plus"/></svg></a></div>
+{% if books %}
+<label class="side-search"><svg class="i"><use href="#i-search"/></svg><input type="search" id="course-filter" placeholder="筛选课程" aria-label="筛选课程" autocomplete="off"></label>
+<p class="side-group"><span>排列</span></p>
+{% for key, label in SORTS.items() %}
+<a class="side-item{{ ' is-on' if key == sort }}" href="/?sort={{ key }}"><svg class="i"><use href="#i-{{ {'custom': 'sliders', 'recent': 'clock', 'name': 'list'}[key] }}"/></svg><span>{{ label }}</span></a>
+{% endfor %}
+<p class="side-group"><span>课程</span><span>{{ books | length }}</span></p>
+{% for b in books %}
+<a class="side-item" href="/courses/{{ b.course.id }}" data-course-item="{{ b.course.name }}"><i class="dot" style="--c: {{ spine_var(b.course.id) }}"></i><span>{{ b.course.name }}</span><em>{{ b.lectures }} 讲</em></a>
+{% endfor %}
+{% endif %}
+{% endblock %}
+
+{% block toolbar %}
+<header class="page-toolbar">
+  <div><h1>全部课程</h1></div>
+  <span class="meta-inline">{{ books | length }} 门课 · {{ total_lectures }} 讲{% if total_ms %} · 共 {{ total_ms | ts }}{% endif %}</span>
+  <span class="grow"></span>
+  {% if books %}
+  <div class="seg" role="group" aria-label="显示方式">
+    <button type="button" data-shelf-view="table" aria-pressed="{{ 'true' if ui.shelf_view == 'table' else 'false' }}"><svg class="i"><use href="#i-rows"/></svg>列表</button>
+    <button type="button" data-shelf-view="books" aria-pressed="{{ 'true' if ui.shelf_view == 'books' else 'false' }}"><svg class="i"><use href="#i-book"/></svg>书脊</button>
+  </div>
+  {% endif %}
+  <a class="button" href="/courses/new"><svg class="i"><use href="#i-plus"/></svg>新建课程</a>
+</header>
+{% endblock %}
+
 {% block body %}
-<main class="library">
+<main class="library shelf-view-{{ ui.shelf_view }}" id="shelf">
   {% if not books %}
   <section class="empty">
     <h1>书架还是空的</h1>
@@ -9,18 +42,59 @@
     <p><a class="button" href="/courses/new">新建课程</a> <a class="pill" href="/settings">先去设置模型和密钥</a></p>
   </section>
   {% else %}
-  <nav class="shelf-tools" aria-label="排列方式">
-    <span class="muted">排列：</span>
-    {% for key, label in SORTS.items() %}
-    <a class="pill{{ ' is-active' if key == sort }}" href="/?sort={{ key }}">{{ label }}</a>
-    {% endfor %}
-    <span class="topbar-spacer"></span>
-    <a class="button" href="/courses/new">新建课程</a>
-  </nav>
-  <section class="shelf">
+  <div class="shelf-table-wrap">
+    <div class="table-frame">
+      <table class="table" id="shelf-table">
+        <thead><tr><th>课程</th><th>讲</th><th style="width: 32%">处理进度</th><th>复习</th><th>下一步</th>{% if sort == "custom" %}<th><span class="sr-only">排序</span></th>{% endif %}</tr></thead>
+        <tbody>
+        {% for b in books %}
+        {% set counts = {} %}
+        {% for key, label, count in b.states %}{% set _ = counts.update({key: count}) %}{% endfor %}
+        <tr data-select="course-{{ b.course.id }}" data-filter="{{ b.course.name }} {{ b.course.settings.subject }}"{{ ' class="is-selected"' | safe if loop.first }}>
+          <td><a class="cname" href="/courses/{{ b.course.id }}"><i style="--c: {{ spine_var(b.course.id) }}"></i><span><b>{{ b.course.name }}</b><small>{{ b.course.settings.subject }}{% if b.course.settings.subject %} · {% endif %}{{ b.course.settings.teaching_description }}</small></span></a></td>
+          <td class="num">{{ b.lectures }} 讲<small>{{ (b.duration_ms | ts) if b.duration_ms else "" }}</small></td>
+          <td>
+            <div class="pbar" aria-hidden="true">{% for key in ("done", "stale", "running", "failed") %}{% if counts.get(key) %}<i class="p-{{ key }}" style="width: {{ (100 * counts[key] / b.lectures) | round(1) }}%"></i>{% endif %}{% endfor %}</div>
+            <div class="states">{% for key, label, count in b.states %}<span class="st state-{{ key }}">{{ label }} {{ count }}</span>{% else %}<span class="muted">还没有讲</span>{% endfor %}</div>
+          </td>
+          <td class="num{{ ' muted-cell' if not b.kp_total }}">{{ (b.kp_reviewed ~ "/" ~ b.kp_total) if b.kp_total else "—" }}</td>
+          <td>
+            {% if counts.get("failed") %}<a class="next" href="/courses/{{ b.course.id }}#chapters" style="color: var(--danger)">查看失败的 {{ counts.failed }} 讲 ›</a>
+            {% elif counts.get("pending") %}<a class="next" href="/courses/{{ b.course.id }}#chapters">处理剩余 {{ counts.pending }} 讲 ›</a>
+            {% elif counts.get("running") %}<span class="st state-running">处理中…</span>
+            {% elif counts.get("stale") %}<a class="next" href="/courses/{{ b.course.id }}">重建课程记忆 ›</a>
+            {% elif not b.lectures %}<a class="next" href="/courses/{{ b.course.id }}#add-lecture">添加第一讲 ›</a>
+            {% elif b.kp_total and b.kp_reviewed < b.kp_total %}<a class="next" href="/courses/{{ b.course.id }}/review">去复习 ›</a>
+            {% elif b.kp_total %}<span class="st state-done">已全部复习</span>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          {% if sort == "custom" %}
+          <td>
+            <div class="order-buttons">
+              {% for direction, label, disabled in [("up", "前移", loop.first), ("down", "后移", loop.last)] %}
+              <form method="post" action="/courses/{{ b.course.id }}/position">
+                <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                <button class="icon-button" name="direction" value="{{ direction }}" title="{{ label }}" aria-label="{{ label }}"{{ " disabled" if disabled }}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="{{ 'M6 15l6-6 6 6' if direction == 'up' else 'M6 9l6 6 6-6' }}"/></svg>
+                </button>
+              </form>
+              {% endfor %}
+            </div>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-title"><svg class="i"><use href="#i-activity"/></svg>最近的后台任务 <a class="small" href="/jobs" style="margin-left: auto; font-weight: 400">全部任务 ›</a></p>
+    <div class="table-frame recent-jobs"><table class="table"><tbody id="recent-jobs"><tr><td class="muted">正在读取…</td></tr></tbody></table></div>
+  </div>
+
+  <section class="shelf shelf-books" aria-label="书脊视图">
     <div class="shelf-row">
       {% for b in books %}
-      <article class="book" style="--spine: {{ b.spine }}">
+      <article class="book" style="--spine: {{ spine_var(b.course.id) }}" data-filter="{{ b.course.name }} {{ b.course.settings.subject }}">
         <a class="book-link" href="/courses/{{ b.course.id }}">
           <span class="book-seq">{{ b.course.settings.subject }}</span>
           <span class="book-title">{{ b.course.name }}</span>
@@ -36,18 +110,6 @@
           <span class="book-meta">复习 {{ b.kp_reviewed }}/{{ b.kp_total }} 个知识点</span>
           {% endif %}
         </a>
-        {% if sort == "custom" %}
-        <div class="book-order">
-          {% for direction, label, disabled in [("up", "前移", loop.first), ("down", "后移", loop.last)] %}
-          <form method="post" action="/courses/{{ b.course.id }}/position">
-            <input type="hidden" name="csrf" value="{{ csrf_token }}">
-            <button class="icon-button" name="direction" value="{{ direction }}" title="{{ label }}" aria-label="{{ label }}"{{ " disabled" if disabled }}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="{{ 'M15 6l-6 6 6 6' if direction == 'up' else 'M9 6l6 6-6 6' }}"/></svg>
-            </button>
-          </form>
-          {% endfor %}
-        </div>
-        {% endif %}
       </article>
       {% endfor %}
     </div>
@@ -56,3 +118,46 @@
   {% endif %}
 </main>
 {% endblock %}
+
+{% block insp %}
+{% if books %}
+<div class="insp-scroll">
+  {% for b in books %}
+  <section class="insp-panel" data-panel="course-{{ b.course.id }}" style="--c: {{ spine_var(b.course.id) }}"{% if not loop.first %} hidden{% endif %}>
+    <div class="cover">
+      <small>{{ b.course.settings.subject }}{% if b.course.settings.subject %} · {% endif %}{{ b.course.settings.teaching_description }} · 笔记：{{ b.course.settings.note_language_name }}</small>
+      <h2>{{ b.course.name }}</h2>
+    </div>
+    <div class="stats">
+      <div><b>{{ b.lectures }}</b><span>讲</span></div>
+      <div><b>{{ (b.duration_ms | ts) if b.duration_ms else "—" }}</b><span>时长</span></div>
+      <div><b>{{ b.kp_total }}</b><span>知识点</span></div>
+      <div><b>{{ b.kp_reviewed }}</b><span>已复习</span></div>
+    </div>
+    <div class="isec">
+      <h4>处理状态</h4>
+      {% for key, label, count in b.states %}<p><span class="st state-{{ key }}">{{ label }}</span> <span class="num">{{ count }} 讲</span></p>{% else %}<p class="muted">还没有讲：打开课程添加录音或录像</p>{% endfor %}
+    </div>
+    {% if b.kp_total %}
+    <div class="isec">
+      <h4>复习进度</h4>
+      <span class="progress" style="--spine: var(--c)"><span style="width: {{ (100 * b.kp_reviewed / b.kp_total) | round(1) }}%"></span></span>
+      <p style="margin-top: 6px">复习 {{ b.kp_reviewed }}/{{ b.kp_total }} 个知识点</p>
+    </div>
+    {% endif %}
+    {% if b.last_activity %}<div class="isec"><h4>最近更新</h4><p class="num">{{ b.last_activity[:16] | replace("T", " ") }}</p></div>{% endif %}
+    <div class="acts">
+      <a class="button" href="/courses/{{ b.course.id }}">打开课程</a>
+      <div class="row">
+        <a class="button button-quiet" href="/courses/{{ b.course.id }}/review">总复习</a>
+        <a class="button button-quiet" href="/courses/{{ b.course.id }}/qa">提问</a>
+        <a class="button button-quiet" href="/courses/{{ b.course.id }}/settings">设置</a>
+      </div>
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block status %}书库 {{ request.app.state.cfg.root }}{% endblock %}
