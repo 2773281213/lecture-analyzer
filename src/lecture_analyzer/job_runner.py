@@ -32,11 +32,11 @@ from typing import IO
 from .config import AppConfig
 from .jobs import LANES, JobStore
 from .library import Library, LibraryError
+from .proc import NO_WINDOW
 
 POLL_SECONDS = 2.0  # 队列线程没被唤醒时，隔这么久查一次任务表
 CANCEL_POLL_SECONDS = 2.0  # 任务运行期间隔这么久看一次是否在别处被取消
 LOG_TAIL_LINES = 8
-NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # Windows：子进程不弹出控制台窗口
 
 Command = Callable[[int], list[str]]
 

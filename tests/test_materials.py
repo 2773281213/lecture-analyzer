@@ -123,6 +123,24 @@ def test_rar_without_tool_asks_to_extract_first(tmp_path: Path, monkeypatch):
         expand([rar], tmp_path / "staging")
 
 
+def test_archive_tool_runs_without_console_window(tmp_path: Path, monkeypatch):
+    """导入 rar/7z 时调外部解压工具，同样不能弹出控制台窗口。"""
+    from types import SimpleNamespace
+
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(archive, "find_tool", lambda suffix: ["7z"])
+    monkeypatch.setattr(archive.subprocess, "run", fake_run)
+    archive_file = tmp_path / "资料.7z"
+    archive_file.write_bytes(b"7z")
+    archive.extract_with_tool(archive_file, tmp_path / "out")
+    assert calls[0]["creationflags"] == archive.NO_WINDOW
+
+
 def test_expand_folder_and_archive(tmp_path: Path):
     folder = tmp_path / "资料"
     _pdf(folder / "ch2.pdf")

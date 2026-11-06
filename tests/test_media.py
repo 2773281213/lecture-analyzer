@@ -1,3 +1,4 @@
+import os
 import wave
 from pathlib import Path
 
@@ -79,3 +80,21 @@ def test_missing_file_raises(tmp_path: Path):
 def test_split_rejects_non_positive_chunk(tmp_path: Path):
     with pytest.raises(MediaError):
         split_wav(tmp_path / "x.wav", 0, tmp_path)
+
+
+def test_ffmpeg_runs_without_console_window(monkeypatch):
+    """桌面程序本身没有控制台：子进程不带 CREATE_NO_WINDOW 时，Windows 会各开一个黑窗口闪一下。
+    转写时每一片音频都要转一次 mp3（被拦截时还要切小再转），一个任务能闪几十次。"""
+    import lecture_analyzer.media as media
+    from types import SimpleNamespace
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    media.run_ffmpeg(["-version"])
+    assert calls[0]["creationflags"] == media.NO_WINDOW
+    assert not os.name == "nt" or media.NO_WINDOW != 0

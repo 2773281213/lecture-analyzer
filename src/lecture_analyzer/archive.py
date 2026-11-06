@@ -23,6 +23,7 @@ from typing import Any, Sequence
 from charset_normalizer import from_bytes
 
 from .documents import IMAGE_SUFFIXES, SUPPORTED_SUFFIXES, UNSUPPORTED_HINTS
+from .proc import NO_WINDOW
 
 ARCHIVE_SUFFIXES = {".zip", ".rar", ".7z"}
 MAX_FILES = 2000  # 一个压缩包最多解出的文件数
@@ -286,7 +287,7 @@ def extract_with_tool(archive: Path, target: Path) -> None:
     try:
         # stdin 接空设备：有密码的压缩包会直接失败，而不是卡在等待输入
         completed = subprocess.run(args, capture_output=True, stdin=subprocess.DEVNULL, timeout=_TOOL_TIMEOUT,
-                                   check=False)
+                                   creationflags=NO_WINDOW, check=False)
     except subprocess.TimeoutExpired as exc:
         raise ArchiveError(f"解压超时：{archive.name}") from exc
     if completed.returncode not in _TOOL_OK:

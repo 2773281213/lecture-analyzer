@@ -9,6 +9,8 @@ from pathlib import Path
 
 import imageio_ffmpeg
 
+from .proc import NO_WINDOW
+
 SAMPLE_RATE = 16_000  # 语音识别模型的标准采样率
 
 
@@ -22,7 +24,9 @@ def ffmpeg_exe() -> str:
 
 def run_ffmpeg(args: list[str]) -> None:
     cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", *args]
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    # 不带 NO_WINDOW 的话，桌面程序每转一片音频都会在屏幕上闪一个黑窗口
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            creationflags=NO_WINDOW)
     if result.returncode != 0:
         raise MediaError(f"ffmpeg 执行失败：{result.stderr.strip()[-800:]}")
 
