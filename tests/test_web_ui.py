@@ -217,3 +217,55 @@ def test_match_signal_note_by_name():
     assert match_signal_note(_signal("受体激动药"), notes) == 2
     assert match_signal_note(_signal("受体激动药有哪些"), notes) == 2
     assert match_signal_note(_signal("病毒命名与分类"), notes) is None
+
+
+def test_signal_priority_levels():
+    """单条信号的重要程度和知识点的星级同一套标准：提示考试、考试范围、强度 3 的强调是 3，
+    强调、易错是 2，说不考是 0，其余（推导、回顾、例题等）是 1。"""
+    from lecture_analyzer.pipeline.review import signal_priority
+
+    assert signal_priority("exam_hint", 3) == 3
+    assert signal_priority("exam_hint", 1) == 3
+    assert signal_priority("scope_include", 2) == 3
+    assert signal_priority("emphasis", 3) == 3
+    assert signal_priority("emphasis", 2) == 2
+    assert signal_priority("emphasis", 1) == 2
+    assert signal_priority("common_mistake", 1) == 2
+    assert signal_priority("scope_exclude", 3) == 0
+    assert signal_priority("worked_example", 2) == 1
+    assert signal_priority("recap", 1) == 1
+    assert signal_priority("derivation", 3) == 1
+
+
+def test_lecture_page_shows_only_key_signals_and_examples(m1_env, monkeypatch):
+    """讲的阅读页只显示绝对重点、次重点和例题：一般信号不显示，只在表格下面提一句还有几条。"""
+    from dataclasses import replace
+
+    client = _processed_client(m1_env)
+    page = client.get(f"/lectures/{m1_env.lecture_id}").text
+    # 夹具的两条信号（提示考试强度 3、强调强度 1）都是重点：星级标签都在，没有隐藏的条数
+    assert 'title="绝对重点"' in page and 'title="次重点"' in page
+    assert "另有" not in page
+
+    # 再补一条回顾信号和一条例题信号：回顾的不显示，例题的照常显示
+    with Library(m1_env.cfg.data_dir / "lecture.db") as library:
+        original = library.signals(m1_env.lecture_id)
+    recap_quote, example_quote = "回顾一下上节课讲的内容", "比如这道题：求半衰期"
+    recap = replace(original[0], signal=original[0].signal.model_copy(
+        update={"type": "recap", "quote": recap_quote}))
+    example = replace(original[0], signal=original[0].signal.model_copy(
+        update={"type": "worked_example", "quote": example_quote}))
+    stored_signals = Library.signals
+
+    def with_extra(self, lecture_id: int):
+        found = stored_signals(self, lecture_id)
+        return found + [recap, example] if lecture_id == m1_env.lecture_id else found
+
+    monkeypatch.setattr(Library, "signals", with_extra)
+    page = client.get(f"/lectures/{m1_env.lecture_id}").text
+    assert "另有 1 条一般信号" in page  # 只看回顾这一条没显示
+    assert "考点信号 3 条" in page  # 状态栏：两条重点 + 一条例题
+    assert 'title="绝对重点"' in page and 'title="次重点"' in page
+    table = page[page.index('id="signals"'):page.index('id="outline"')]
+    assert example_quote in table and recap_quote not in table
+    assert recap_quote not in page  # 回顾那条哪儿都不显示

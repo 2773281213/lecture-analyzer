@@ -10,13 +10,13 @@ from ..config import AppConfig
 from ..config_edit import STEP_LABELS as CONFIG_STEP_LABELS
 from ..jobs import Job, JobStore, unfinished_jobs
 from ..knowledge import CourseMemory, HistorySignal, KnowledgePoint, LectureCache
-from ..library import Course, Lecture, Library, PageRef
+from ..library import CheckedSignal, Course, Lecture, Library, PageRef
 from ..materials import ITEM_KINDS, PAGE_KINDS, Material, MaterialStore
 from ..pipeline.ingest import page_image
 from ..pipeline.integrate import match_signal_note
 from ..pipeline.materials import ITEM_TYPES, MaterialHit, material_hits, stale_materials
 from ..pipeline.organize import next_free_seq
-from ..pipeline.review import kp_priority, review_book
+from ..pipeline.review import kp_priority, review_book, signal_priority
 from ..pipeline.run import STEP_LABELS, STEPS
 from ..pipeline.slides import describe_pages
 from ..pipeline.report_render import PRIORITY_LEGEND
@@ -201,6 +201,15 @@ def review_view(library: Library, course: Course, focus: bool) -> dict[str, Any]
 # ---------- 讲（章）的阅读页 ----------
 
 
+@dataclass
+class KeySignal:
+    """要显示的考点信号：绝对重点、次重点和例题。"""
+
+    item: CheckedSignal  # 校验过的信号
+    kp: int | None  # 本讲第几个知识点（从 1 数），没有对应时为 None
+    priority: int  # 重要程度，见 review.signal_priority
+
+
 def lecture_view(library: Library, lecture: Lecture) -> dict[str, Any]:
     course = library.course_by_id(lecture.course_id)
     memory = CourseMemory(library)
@@ -209,13 +218,17 @@ def lecture_view(library: Library, lecture: Lecture) -> dict[str, Any]:
     notes = data.notes(lecture.id)
     offsets = lecture.part_offsets()
     signals = library.signals(lecture.id)
+    signal_kps = _signal_notes(memory, lecture, notes, [item.signal for item in signals])
+    key_signals = _key_signals(signals, signal_kps)
     return {
         "course": course,
         "lecture": lecture,
         "notes": notes,
         "segments": segments,
         "signals": signals,
-        "signal_kps": _signal_notes(memory, lecture, notes, [item.signal for item in signals]),
+        "signal_kps": signal_kps,
+        "key_signals": key_signals,
+        "hidden_signals": len(signals) - len(key_signals),
         "media_kind": lecture_media_type(lecture),
         "parts": [
             {"src": f"/media/{lecture.id}/{part.part}", "offset": offset, "duration": part.duration_ms or 0,
@@ -419,6 +432,18 @@ def _signal_notes(
             note_index = match_signal_note(signal, notes)
         result.append(note_index)
     return result
+
+
+def _key_signals(signals: Sequence[CheckedSignal], signal_kps: Sequence[int | None]) -> list[KeySignal]:
+    """要显示的信号：重要程度 2 以上的（绝对重点、次重点），再加上例题；顺序与 signals 一致。
+
+    推导、回顾、作业、课件相关的信号使用者觉得是噪音，不显示（条数见 hidden_signals）。"""
+    keys: list[KeySignal] = []
+    for position, item in enumerate(signals):
+        priority = signal_priority(item.signal.type, item.signal.strength)
+        if priority >= 2 or item.signal.type == "worked_example":
+            keys.append(KeySignal(item, signal_kps[position], priority))
+    return keys
 
 
 def _references(memory: CourseMemory, lecture: Lecture, notes: LectureNotes | None, data: LectureCache) -> list[dict]:

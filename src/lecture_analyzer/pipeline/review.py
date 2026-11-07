@@ -56,16 +56,31 @@ class StoredChapter(BaseModel):
     entries: list[StoredEntry]
 
 
+def signal_priority(signal_type: str, strength: int) -> int:
+    """单条考点信号的重要程度，和 kp_priority 的星级用同一套标准：
+    3（★★★ 绝对重点）提示考试、考试范围，或强度 3 的强调；2（★★ 次重点）强调、易错；
+    1 其他（推导、回顾、作业、课件外补充等）；0 老师明确说不考。"""
+    if signal_type in STAR_TYPES or (signal_type == "emphasis" and strength >= 3):
+        return 3
+    if signal_type in {"emphasis", "common_mistake"}:
+        return 2
+    if signal_type == "scope_exclude":
+        return 0
+    return 1
+
+
 def kp_priority(signals: Sequence[HistorySignal], lecture_count: int, hits: Sequence[MaterialHit] = ()) -> int:
     """重要程度：3 提示考试/考试范围、强度 3 的强调，或出现在往年真题、模拟题、复习提纲里；
     2 强调、易错或在 2 讲以上出现；1 其他；0 老师明确说不考或考试通知说不考（且没有说要考）。"""
     if excluded(signals, hits):
         return 0
-    types = {s.type for s in signals} | {h.item.item_type for h in hits if h.material.kind == "notice"}
+    notice_types = {h.item.item_type for h in hits if h.material.kind == "notice"}
     in_materials = any(h.material.kind in MATERIAL_STAR_KINDS for h in hits)
-    if types & STAR_TYPES or in_materials or any(s.type == "emphasis" and s.strength >= 3 for s in signals):
+    if (notice_types & STAR_TYPES or in_materials
+            or any(signal_priority(s.type, s.strength) == 3 for s in signals)):
         return 3
-    if types & {"emphasis", "common_mistake"} or lecture_count >= 2:
+    if (notice_types & {"emphasis", "common_mistake"} or lecture_count >= 2
+            or any(signal_priority(s.type, s.strength) == 2 for s in signals)):
         return 2
     return 1
 
