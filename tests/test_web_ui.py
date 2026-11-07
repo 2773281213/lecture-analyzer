@@ -5,7 +5,9 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from lecture_analyzer.library import Library
+from lecture_analyzer.pipeline.integrate import match_signal_note
 from lecture_analyzer.pipeline.run import LectureRunner
+from lecture_analyzer.schemas import LectureNotes, Signal
 from lecture_analyzer.web import create_app
 from lecture_analyzer.web.themes import THEMES, spine_var, ui_prefs
 
@@ -22,6 +24,11 @@ def _processed_client(env) -> TestClient:
 def _request(**cookies: str) -> SimpleNamespace:
     """界面偏好只读 request.cookies，用这个假请求就够了。"""
     return SimpleNamespace(cookies=dict(cookies))
+
+
+def _signal(name: str) -> Signal:
+    """一条考点信号，只有知识点名称和匹配结果有关。"""
+    return Signal(type="exam_hint", knowledge_point=name, strength=2, quote="原话", segment_ids=[1], slide_pages=[])
 
 
 def _html_tag(page: str) -> str:
@@ -178,3 +185,35 @@ def test_side_cookie_collapses_the_side_column(m1_env):
     assert "side-off" not in _app_tag(client.get(f"/courses/{m1_env.course_id}").text)
     client.cookies.set("lec_side", "0")
     assert "side-off" in _app_tag(client.get(f"/courses/{m1_env.course_id}").text)
+
+
+def test_lecture_page_signals_before_outline_and_knowledge(m1_env):
+    """讲的阅读页先看到考点信号，再是大纲和知识点；侧栏目录里考点信号也排在最前。"""
+    page = _processed_client(m1_env).get(f"/lectures/{m1_env.lecture_id}").text
+    assert page.index('id="signals"') < page.index('id="outline"') < page.index('id="knowledge"')
+    assert page.index('href="#signals"') < page.index('href="#outline"')
+
+
+def test_signal_table_links_to_the_lecture_knowledge_point(m1_env):
+    """信号表格里的知识点名称链到本讲对应的知识点卡片（夹具的整合结果把所有信号都归到第 1 个知识点）。"""
+    page = _processed_client(m1_env).get(f"/lectures/{m1_env.lecture_id}").text
+    assert '<a class="kp-link" href="#kp-1">阿司匹林的剂量分段</a>' in page
+
+
+def test_match_signal_note_by_name():
+    """信号写的知识点名称按名称匹配到本讲第几个知识点：完全相同、略有出入都能对上，毫不相干返回 None。"""
+    notes = LectureNotes.model_validate({
+        "title": "药理学",
+        "outline": ["阿司匹林的剂量分段", "受体激动药"],
+        "knowledge_points": [
+            {"name": "阿司匹林的剂量分段", "summary_md": "小于 75 mg 抗血凝", "slide_pages": [], "segment_ids": [3],
+             "minutes": 1.5},
+            {"name": "受体激动药", "summary_md": "剂量与效应", "slide_pages": [], "segment_ids": [1], "minutes": 2},
+        ],
+        "examples": [],
+        "homework": [],
+        "signals": [],
+    })
+    assert match_signal_note(_signal("受体激动药"), notes) == 2
+    assert match_signal_note(_signal("受体激动药有哪些"), notes) == 2
+    assert match_signal_note(_signal("病毒命名与分类"), notes) is None

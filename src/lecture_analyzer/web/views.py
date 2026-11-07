@@ -13,6 +13,7 @@ from ..knowledge import CourseMemory, HistorySignal, KnowledgePoint, LectureCach
 from ..library import Course, Lecture, Library, PageRef
 from ..materials import ITEM_KINDS, PAGE_KINDS, Material, MaterialStore
 from ..pipeline.ingest import page_image
+from ..pipeline.integrate import match_signal_note
 from ..pipeline.materials import ITEM_TYPES, MaterialHit, material_hits, stale_materials
 from ..pipeline.organize import next_free_seq
 from ..pipeline.review import kp_priority, review_book
@@ -21,7 +22,7 @@ from ..pipeline.slides import describe_pages
 from ..pipeline.report_render import PRIORITY_LEGEND
 from ..reports import ReportStore
 from ..render import RELATION_LABELS, ROLE_LABELS, SIGNAL_LABELS, first_time, group_by_chapter, signal_stats
-from ..schemas import LectureNotes
+from ..schemas import LectureNotes, Signal
 from ..textnorm import normalize_zh
 from .exam_plan_page import plan_context
 
@@ -207,12 +208,14 @@ def lecture_view(library: Library, lecture: Lecture) -> dict[str, Any]:
     segments = data.segments(lecture.id)
     notes = data.notes(lecture.id)
     offsets = lecture.part_offsets()
+    signals = library.signals(lecture.id)
     return {
         "course": course,
         "lecture": lecture,
         "notes": notes,
         "segments": segments,
-        "signals": library.signals(lecture.id),
+        "signals": signals,
+        "signal_kps": _signal_notes(memory, lecture, notes, [item.signal for item in signals]),
         "media_kind": lecture_media_type(lecture),
         "parts": [
             {"src": f"/media/{lecture.id}/{part.part}", "offset": offset, "duration": part.duration_ms or 0,
@@ -396,6 +399,26 @@ def _kp_links(memory: CourseMemory, course: Course, lecture: Lecture, data: Lect
             links[appearance.note_index] = KPLink(kp.key, kp.name, kp.chapter,
                                                   ROLE_LABELS.get(appearance.role, appearance.role), others)
     return links
+
+
+def _signal_notes(
+    memory: CourseMemory, lecture: Lecture, notes: LectureNotes | None, signals: Sequence[Signal]
+) -> list[int | None]:
+    """本讲各条信号对应本讲第几个知识点（从 1 数），顺序与 signals 一致；没有对应时为 None。"""
+    if notes is None:
+        return [None] * len(signals)
+    note_of_key: dict[int, int] = {}
+    for note_index, key in sorted(memory.kp_keys(lecture.id).items()):
+        note_of_key.setdefault(key, note_index)  # 几个知识点并入同一个课程知识点时取最靠前的
+    keys = memory.signal_keys(lecture.id)
+    result: list[int | None] = []
+    for position, signal in enumerate(signals):
+        key = keys[position] if position < len(keys) else None
+        note_index = note_of_key.get(key) if key is not None else None
+        if note_index is None or not 1 <= note_index <= len(notes.knowledge_points):
+            note_index = match_signal_note(signal, notes)
+        result.append(note_index)
+    return result
 
 
 def _references(memory: CourseMemory, lecture: Lecture, notes: LectureNotes | None, data: LectureCache) -> list[dict]:

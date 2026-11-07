@@ -28,6 +28,7 @@
 {% if notes %}
 <p class="side-group"><span>本讲</span></p>
 <nav class="side-nav" data-spy aria-label="本讲目录">
+  <a class="side-item" href="#signals"><svg class="i"><use href="#i-target"/></svg><span>考点信号</span><em>{{ signals | length }}</em></a>
   <a class="side-item" href="#outline"><svg class="i"><use href="#i-list"/></svg><span>大纲</span></a>
   {% if references %}<a class="side-item" href="#memory"><svg class="i"><use href="#i-history"/></svg><span>与前几讲的联系</span><em>{{ references | length }}</em></a>{% endif %}
   <a class="side-item" href="#knowledge"><svg class="i"><use href="#i-layers"/></svg><span>知识点</span><em>{{ notes.knowledge_points | length }}</em></a>
@@ -37,7 +38,6 @@
   {% endfor %}
   {% if notes.examples %}<a class="side-item" href="#examples"><svg class="i"><use href="#i-pen"/></svg><span>例题与推导</span><em>{{ notes.examples | length }}</em></a>{% endif %}
   <a class="side-item" href="#homework"><svg class="i"><use href="#i-book"/></svg><span>作业</span><em>{{ (notes.homework | length) if notes.homework else "无" }}</em></a>
-  <a class="side-item" href="#signals"><svg class="i"><use href="#i-target"/></svg><span>考点信号</span><em>{{ signals | length }}</em></a>
 </nav>
 {% endif %}
 <span class="grow"></span>
@@ -87,6 +87,30 @@
   {% if not notes %}
   <section class="notice">这一讲还没有笔记：点上面的「处理」开始（转写、匹配课件、整理笔记、整合课程记忆），在后台进行，完成后本页自动刷新。</section>
   {% else %}
+  <section id="signals" class="block">
+    <h2>考点信号 <span class="count">{{ signals | length }} 条</span></h2>
+    <div class="table-wrap">
+      <table class="signals">
+        <thead><tr><th>类型</th><th>知识点</th><th>强度</th><th>时间</th><th>原话</th><th>校验</th></tr></thead>
+        <tbody>
+        {% for item in signals %}
+        {% set t = time_of(item.segment_ids) %}
+        {% set kp_n = signal_kps[loop.index0] %}
+        <tr class="{{ 'ok' if item.valid else 'bad' }}">
+          <td><span class="sig sig-{{ item.signal.type }}">{{ SIGNAL_LABELS.get(item.signal.type, item.signal.type) }}</span></td>
+          <td>{% if kp_n %}<a class="kp-link" href="#kp-{{ kp_n }}">{{ item.signal.knowledge_point }}</a>{% else %}{{ item.signal.knowledge_point }}{% endif %}</td>
+          <td><span class="strength" aria-label="强度 {{ item.signal.strength }}">{{ "●" * item.signal.strength }}{{ "○" * (3 - item.signal.strength) }}</span></td>
+          <td>{% if t is not none %}<button class="time" data-t="{{ t }}">{{ t | ts }}</button>{% else %}-{% endif %}</td>
+          <td class="quote">{% if item.signal.quote %}{{ quote_html(item.signal.quote, item.signal.meaning) }}{% elif item.signal.slide_pages %}课件 {{ slide_pages(item.signal.slide_pages, page_links) }}{% else %}—{% endif %}</td>
+          <td>{{ "通过" if item.valid else "未找到原话" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="muted">没有识别到考点信号</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
   <section id="outline" class="block">
     <h2>大纲</h2>
     <div class="outline-box"><ol class="outline">{% for item in notes.outline %}<li>{{ item }}</li>{% endfor %}</ol></div>
@@ -156,30 +180,6 @@
   <section id="homework" class="block">
     <h2>作业</h2>
     {% if notes.homework %}<ul>{% for item in notes.homework %}<li>{{ item }}</li>{% endfor %}</ul>{% else %}<p class="muted">没有布置作业</p>{% endif %}
-  </section>
-
-  <section id="signals" class="block">
-    <h2>考点信号 <span class="count">{{ signals | length }} 条</span></h2>
-    <div class="table-wrap">
-      <table class="signals">
-        <thead><tr><th>类型</th><th>知识点</th><th>强度</th><th>时间</th><th>原话</th><th>校验</th></tr></thead>
-        <tbody>
-        {% for item in signals %}
-        {% set t = time_of(item.segment_ids) %}
-        <tr class="{{ 'ok' if item.valid else 'bad' }}">
-          <td><span class="sig sig-{{ item.signal.type }}">{{ SIGNAL_LABELS.get(item.signal.type, item.signal.type) }}</span></td>
-          <td>{{ item.signal.knowledge_point }}</td>
-          <td><span class="strength" aria-label="强度 {{ item.signal.strength }}">{{ "●" * item.signal.strength }}{{ "○" * (3 - item.signal.strength) }}</span></td>
-          <td>{% if t is not none %}<button class="time" data-t="{{ t }}">{{ t | ts }}</button>{% else %}-{% endif %}</td>
-          <td class="quote">{% if item.signal.quote %}{{ quote_html(item.signal.quote, item.signal.meaning) }}{% elif item.signal.slide_pages %}课件 {{ slide_pages(item.signal.slide_pages, page_links) }}{% else %}—{% endif %}</td>
-          <td>{{ "通过" if item.valid else "未找到原话" }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="6" class="muted">没有识别到考点信号</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
   </section>
   {% endif %}
 
@@ -357,9 +357,10 @@
   <ul class="sig-list">
     {% for item in signals %}
     {% set t = time_of(item.segment_ids) %}
+    {% set kp_n = signal_kps[loop.index0] %}
     <li class="{{ 'ok' if item.valid else 'bad' }}">
       <span class="sig sig-{{ item.signal.type }}">{{ SIGNAL_LABELS.get(item.signal.type, item.signal.type) }}</span>
-      <span class="sig-kp">{{ item.signal.knowledge_point }} {% if t is not none %}<button class="time" data-t="{{ t }}">{{ t | ts }}</button>{% endif %}</span>
+      <span class="sig-kp">{% if kp_n %}<a class="kp-link" href="#kp-{{ kp_n }}">{{ item.signal.knowledge_point }}</a>{% else %}{{ item.signal.knowledge_point }}{% endif %} {% if t is not none %}<button class="time" data-t="{{ t }}">{{ t | ts }}</button>{% endif %}</span>
       {% if item.signal.quote %}<span class="sig-quote">{{ quote_html(item.signal.quote, item.signal.meaning) }}</span>{% endif %}
     </li>
     {% else %}

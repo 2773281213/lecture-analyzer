@@ -417,12 +417,18 @@ def _resolve_signals(
 
 def _match_signal(signal: Signal, notes: LectureNotes, note_keys: dict[int, int]) -> int | None:
     """模型没给或给错时，按信号写的知识点名称匹配本讲知识点。"""
+    index = match_signal_note(signal, notes)
+    return note_keys.get(index) if index is not None else None
+
+
+def match_signal_note(signal: Signal, notes: LectureNotes) -> int | None:
+    """按信号写的知识点名称匹配本讲知识点，返回本讲第几个知识点（从 1 数）；匹配不上返回 None。"""
     names = [normalize_zh(kp.name) for kp in notes.knowledge_points]
     query = normalize_zh(signal.knowledge_point)
     if not query or not names:
         return None
     match = process.extractOne(query, names, scorer=fuzz.partial_ratio, score_cutoff=SIGNAL_MATCH_CUTOFF)
-    return note_keys.get(match[2] + 1) if match else None
+    return match[2] + 1 if match else None
 
 
 def _resolve_references(

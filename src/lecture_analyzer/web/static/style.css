@@ -501,6 +501,11 @@ table.signals tr.bad td { color: var(--muted); }
 table.signals tr.bad td:last-child { color: var(--danger); }
 table.signals .quote { font-size: 13px; color: var(--soft); max-width: 420px; }
 .steps td:first-child { white-space: nowrap; width: 8em; }
+/* 讲的阅读页的考点信号表：类型、强度、时间、校验不折行，空间留给知识点和原话 */
+#signals table.signals td:is(:nth-child(1), :nth-child(3), :nth-child(4), :nth-child(6)) { white-space: nowrap; width: 1%; }
+#signals table.signals :is(th, td) { padding-left: 8px; padding-right: 8px; }
+#signals table.signals .quote { min-width: 150px; }
+#signals table.signals td:nth-child(2) { min-width: 7em; }
 
 /* 卡片、提示 */
 .card {
@@ -648,6 +653,7 @@ button.time {
 }
 button.time:hover { color: var(--ac-fg); background: var(--ac); }
 .card.kp-card.is-playing { border-color: var(--hl); box-shadow: 0 0 0 3px var(--ac-weak); }
+.card.kp-card:target { border-color: var(--hl); box-shadow: 0 0 0 3px var(--ac-weak); }
 .now-tag { display: none; padding: 0 7px; font-size: 11.5px; font-weight: 600; line-height: 1.7; color: var(--now-fg); background: var(--now-bg); border-radius: 4px; white-space: nowrap; }
 .is-playing .now-tag { display: inline-block; }
 .references { list-style: none; margin: 0; padding: 0; }
