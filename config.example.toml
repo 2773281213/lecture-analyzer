@@ -106,6 +106,9 @@ price_cache_read = 0.2
 
 [models.claude.options]
 refusal_fallback = true        # 请求被拒答时由服务端换模型重试（只在直连官方接口时生效，走中转站时自动关闭）
+fallback = "gpt"               # 客户端兜底：这个档案拒答时，改用「gpt」档案重跑同一次请求（任何接入方式都有效；
+                               # 可以再给 gpt 配 fallback，最多三层）。拒答与型号有关，换一个模型往往就能做。
+                               # 输入被上游内容审核过滤时不换模型（那种要切小或换内容，见转写的处理）
 
 # 默认按 OpenAI 兼容格式接入（多数中转站只提供 /v1，没有 Gemini 原生的 /v1beta 接口），GEMINI_BASE_URL 要以 /v1 结尾。
 # 直连 Google 官方或中转站提供 /v1beta 时：把 adapter 改成 "gemini"、structured 改成 "native"，并去掉下面的 options。

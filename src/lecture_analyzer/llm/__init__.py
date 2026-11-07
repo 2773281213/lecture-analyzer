@@ -10,27 +10,33 @@ from .base import (
     LLMResult,
     ModelProfile,
     Part,
+    RefusalError,
     StructuredOutputError,
     TextPart,
     Usage,
+    billed_profile,
     looks_content_blocked,
 )
+from .fallback import FallbackProvider
 from .registry import adapter_types, create_provider
 
 __all__ = [
     "AudioPart",
     "ContentBlockedError",
     "EmptyResponseError",
+    "FallbackProvider",
     "ImagePart",
     "LLMError",
     "LLMProvider",
     "LLMResult",
     "ModelProfile",
     "Part",
+    "RefusalError",
     "StructuredOutputError",
     "TextPart",
     "Usage",
     "adapter_types",
+    "billed_profile",
     "create_provider",
     "looks_content_blocked",
 ]

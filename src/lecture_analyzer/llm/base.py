@@ -80,6 +80,9 @@ class ModelProfile(BaseModel):
     tokens_per_char: float = 1.0  # 中文字符到 token 的换算比例，M0 实测后填写
     timeout_s: float = 600.0
     options: dict[str, Any] = {}  # 适配器专属选项
+    # 主模型拒答时自动改用这个档案重跑同一次请求（config.toml 里写 options.fallback = "档案名"）；
+    # 由 load_config 解析成档案对象，可以是多级链条，见 llm/fallback.py
+    fallback_profile: ModelProfile | None = None
 
     @property
     def is_configured(self) -> bool:
@@ -136,6 +139,16 @@ class LLMResult(Generic[OutT]):
     output: OutT
     usage: Usage
     model: str
+    # 实际作答的档案：主模型拒答、由备用档案接手时是备用档案，正常情况就是主档案本身
+    used_profile: ModelProfile | None = None
+    fallback_used: bool = False  # 这份结果是备用档案给的（主模型拒答过）
+
+
+def billed_profile(result: LLMResult[Any], intended: ModelProfile) -> ModelProfile:
+    """记账和展示用的档案：正常是本来指定的档案，换过模型时是实际作答的备用档案。"""
+    if result.fallback_used and result.used_profile is not None:
+        return result.used_profile
+    return intended
 
 
 class LLMError(RuntimeError):
@@ -163,6 +176,20 @@ class ContentBlockedError(EmptyResponseError):
     实测（Gemini 3.8 Flash + 药理学第 8 讲）：10 分钟的片段返回 400「blocked by Gemini's filters」，
     对半切成两个 5 分钟仍有一半被拦，再切成四个 2.5 分钟就全部转写成功。
     """
+
+
+class RefusalError(EmptyResponseError):
+    """模型按自己的安全策略拒绝作答（Anthropic 的 stop_reason: refusal、OpenAI 系的 content_filter / refusal），
+    没有可用的结果。
+
+    和「输入被上游过滤」不是一回事：这类拒答往往换个模型就能做（实测病毒学第 4 讲的知识点整理，
+    Claude 以 category=bio 拒绝，同样输入 Gemini 一次通过），所以档案配了 `options.fallback` 时由
+    FallbackProvider 自动换下一个档案重跑。category 是厂商给的原因分类，没有时为空串。
+    """
+
+    def __init__(self, message: str, usage: Usage | None = None, category: str = "") -> None:
+        super().__init__(message, usage)
+        self.category = category
 
 
 # 各家在请求阶段被内容审核拦下时的说法（中转站多把上游原文透传过来）：命中就当内容拦截，不当成普通的请求错误，
@@ -288,7 +315,7 @@ class LLMProvider(ABC):
             parts, system=system, schema=None, effort=effort,
             max_tokens=max_tokens or self.profile.max_output,
         )
-        return LLMResult(text, usage, self.profile.model)
+        return LLMResult(text, usage, self.profile.model, self.profile)
 
     def generate_structured(
         self,
@@ -311,7 +338,7 @@ class LLMProvider(ABC):
                     attempt_parts, system=system, schema=schema, effort=effort, max_tokens=limit
                 )
                 usage = usage + call_usage
-                return LLMResult(parse_structured(text, schema), usage, self.profile.model)
+                return LLMResult(parse_structured(text, schema), usage, self.profile.model, self.profile)
             except ValueError as error:  # 含 pydantic.ValidationError
                 failure = error
                 attempt_parts = [*parts, TextPart(_repair_hint(error))]

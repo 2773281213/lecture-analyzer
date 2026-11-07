@@ -163,6 +163,15 @@ class AppConfig(BaseModel):
                 problems.append(f"[asr] llm_profile 指向的档案「{self.asr.llm_profile}」不存在")
             elif not profile.audio:
                 problems.append(f"[asr] llm_profile 档案「{profile.name}」不支持音频输入（audio = false）")
+        for name, profile in self.models.items():
+            wanted = str(profile.options.get("fallback") or "").strip()
+            if not wanted:
+                continue
+            target = self.models.get(wanted)
+            if target is None:
+                problems.append(f"档案「{name}」的备用模型「{wanted}」不存在（拒答时不会自动换模型）")
+            elif not target.is_configured:
+                problems.append(f"档案「{name}」的备用模型「{wanted}」还没有填写 model（拒答时不会自动换模型）")
         return problems
 
 
@@ -202,6 +211,27 @@ def _apply_model_env(profile: ModelProfile) -> ModelProfile:
     return profile.model_copy(update={"model": value}) if value else profile
 
 
+MAX_FALLBACK_DEPTH = 3  # 拒答自动轮换最多往下几层（防止档案互相指向对方）
+
+
+def _with_fallback(
+    profile: ModelProfile, models: dict[str, ModelProfile], seen: frozenset[str], depth: int
+) -> ModelProfile:
+    """把 options.fallback 里的档案名解析成档案对象，供 FallbackProvider 使用。
+
+    名字写错、指向自己没有填型号的档案、或者几个档案互相指向时，就当没有备用档案（不报错，照常能跑）。
+    """
+    wanted = str(profile.options.get("fallback") or "").strip()
+    if not wanted or depth >= MAX_FALLBACK_DEPTH or wanted in seen or wanted == profile.name:
+        return profile
+    target = models.get(wanted)
+    if target is None or not target.is_configured:
+        return profile
+    chained = _with_fallback(target, models, seen | {profile.name}, depth + 1)
+    return profile.model_copy(update={"fallback_profile": chained})
+
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     config_path = find_config_path(path)
     load_env_file(config_path.parent / ".env")
@@ -211,6 +241,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         models = {
             name: _apply_model_env(ModelProfile(name=name, **values)) for name, values in raw.get("models", {}).items()
         }
+        models = {name: _with_fallback(profile, models, frozenset(), 0) for name, profile in models.items()}
         steps = {**DEFAULT_STEPS, **raw.get("steps", {})}
         steps.setdefault("match", steps.get("page_digest", "gemini"))
         steps.setdefault("qa_retrieve", steps["match"])

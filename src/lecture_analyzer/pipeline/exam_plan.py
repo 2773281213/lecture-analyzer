@@ -22,7 +22,7 @@ from ..exam_plans import (
     PlanRule, PlanScope, normalize_type,
 )
 from ..library import Course, Lecture, Library, LibraryError
-from ..llm import TextPart, Usage, create_provider
+from ..llm import TextPart, Usage, billed_profile, create_provider
 from ..materials import MaterialStore
 from ..prompts import load_prompt
 from ..schemas import ExamPlanOutput
@@ -169,9 +169,10 @@ def analyze_exam_plan(
         [TextPart(assembled.text), TextPart("请整理这门课的考试方案。")], ExamPlanOutput, system=system,
         effort=cfg.effort_for_step("exam_plan"),
     )
-    library.log_call(None, "exam_plan", profile, result.usage, course_id=course.id)
+    used = billed_profile(result, profile)  # 主模型拒答时由备用档案接手
+    library.log_call(None, "exam_plan", used, result.usage, course_id=course.id)
     plan = to_plan(result.output, source, segments).computed()
-    course = store.save_draft(course, plan, profile.model)
+    course = store.save_draft(course, plan, used.model)
     unverified = sum(not e.verified for e in plan_evidences(plan))
     notes = [f"题型 {len(plan.question_types)} 种、答题要求 {len(plan.answer_rules)} 条、考试范围 {len(plan.scope)} 条"]
     if unverified:

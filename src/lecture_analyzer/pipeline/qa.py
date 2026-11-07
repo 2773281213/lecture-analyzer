@@ -21,7 +21,7 @@ from ..conversations import QATurn
 from ..exam_plans import ExamPlanStore, plan_block
 from ..knowledge import CourseMemory, KnowledgePoint, LectureCache
 from ..library import Course, Lecture, Library, LibraryError
-from ..llm import TextPart, create_provider
+from ..llm import TextPart, billed_profile, create_provider
 from ..prompts import load_prompt
 from ..schemas import QAAnswer, QARetrieval
 from ..textnorm import strip_foreign_asides
@@ -139,13 +139,14 @@ def _retrieve(ctx: QAContext, tree: list[KnowledgePoint], report: Report) -> tup
         [TextPart(assembled.text), TextPart(ask)], QARetrieval, system=system,
         effort=ctx.cfg.effort_for_step("qa_retrieve"),
     )
-    ctx.library.log_call(None, "qa_retrieve", profile, result.usage, course_id=ctx.course.id)
+    used = billed_profile(result, profile)  # 主模型拒答时由备用档案接手
+    ctx.library.log_call(None, "qa_retrieve", used, result.usage, course_id=ctx.course.id)
     valid = {kp.key for kp in tree}
     parsed = dict.fromkeys(parse_key(text) for text in result.output.knowledge_points)
     keys = [key for key in parsed if key is not None and key in valid]
     in_scope = {lecture.seq for lecture in ctx.lectures}
     seqs = [seq for seq in dict.fromkeys(result.output.lectures) if seq in in_scope]
-    return keys[:MAX_KPS], seqs[:MAX_LECTURES], profile.model
+    return keys[:MAX_KPS], seqs[:MAX_LECTURES], used.model
 
 
 def _catalog_line(kp: KnowledgePoint, hits: Sequence[MaterialHit]) -> str:
@@ -276,8 +277,9 @@ def _answer(
     result = create_provider(profile).generate_structured(
         [TextPart(assembled.text), TextPart(ask)], QAAnswer, system=system, effort=ctx.cfg.effort_for_step("qa"),
     )
-    ctx.library.log_call(None, "qa", profile, result.usage, course_id=ctx.course.id)
-    return result.output, profile.model, trimmed_note(assembled.trimmed)
+    used = billed_profile(result, profile)
+    ctx.library.log_call(None, "qa", used, result.usage, course_id=ctx.course.id)
+    return result.output, used.model, trimmed_note(assembled.trimmed)
 
 
 def _kp_line(kp: KnowledgePoint) -> str:

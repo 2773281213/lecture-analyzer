@@ -38,6 +38,92 @@ def test_missing_config_raises(tmp_path: Path, monkeypatch):
         find_config_path()
 
 
+def _write_config(tmp_path: Path, text: str, name: str = "config.toml") -> Path:
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+TWO_MODELS = """
+[models.claude]
+adapter = "anthropic"
+model = "claude-x"
+
+[models.claude.options]
+fallback = "gpt"
+
+[models.gpt]
+adapter = "openai_compat"
+model = "gpt-x"
+"""
+
+
+def test_fallback_profile_is_resolved(tmp_path: Path):
+    """档案写了 options.fallback 时，解析成档案对象交给 FallbackProvider（拒答自动轮换）。"""
+    cfg = load_config(_write_config(tmp_path, TWO_MODELS))
+    claude = cfg.profile("claude")
+    assert claude.fallback_profile is not None and claude.fallback_profile.name == "gpt"
+    assert cfg.profile("gpt").fallback_profile is None
+    assert cfg.check() == [] or not any("备用模型" in p for p in cfg.check())
+
+
+def test_fallback_to_unknown_profile_is_ignored(tmp_path: Path):
+    cfg = load_config(_write_config(tmp_path, """
+[models.claude]
+adapter = "anthropic"
+model = "claude-x"
+
+[models.claude.options]
+fallback = "不存在"
+"""))
+    assert cfg.profile("claude").fallback_profile is None
+    assert any("备用模型「不存在」不存在" in p for p in cfg.check())
+
+
+def test_fallback_to_unconfigured_profile_is_ignored(tmp_path: Path):
+    cfg = load_config(_write_config(tmp_path, """
+[models.claude]
+adapter = "anthropic"
+model = "claude-x"
+
+[models.claude.options]
+fallback = "gpt"
+
+[models.gpt]
+adapter = "openai_compat"
+model = ""
+"""))
+    assert cfg.profile("claude").fallback_profile is None
+    assert any("还没有填写 model" in p and "备用模型" in p for p in cfg.check())
+
+
+def test_fallback_cycle_stops(tmp_path: Path):
+    """两个档案互相指向对方时不能无限递归。"""
+    cfg = load_config(_write_config(tmp_path, """
+[models.a]
+adapter = "openai_compat"
+model = "a"
+
+[models.a.options]
+fallback = "b"
+
+[models.b]
+adapter = "openai_compat"
+model = "b"
+
+[models.b.options]
+fallback = "a"
+"""))
+    chain = 0
+    profile = cfg.profile("a")
+    while profile.fallback_profile is not None:
+        chain += 1
+        profile = profile.fallback_profile
+        assert chain <= 3
+    assert chain == 1
+
+
+
 def test_config_found_via_env(example_config: Path, monkeypatch, tmp_path: Path):
     other = tmp_path / "elsewhere"
     other.mkdir()

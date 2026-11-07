@@ -41,6 +41,7 @@ from .base import (
     LLMProvider,
     ModelProfile,
     Part,
+    RefusalError,
     TextPart,
     Usage,
     looks_content_blocked,
@@ -129,10 +130,10 @@ class OpenAICompatProvider(LLMProvider):
         if choice.finish_reason == "length":
             raise LLMError(self._truncated_message(max_tokens), usage)
         if choice.finish_reason == "content_filter":
-            raise LLMError(f"模型档案「{self.profile.name}」的输出被内容过滤拦截", usage)
+            raise RefusalError(f"模型档案「{self.profile.name}」的输出被内容过滤拦截", usage, "content_filter")
         refusal = getattr(choice.message, "refusal", None)
         if refusal:
-            raise LLMError(f"模型拒绝了这次请求：{refusal}", usage)
+            raise RefusalError(f"模型拒绝了这次请求：{refusal}", usage, "refusal")
         return choice.message.content or ""
 
     def list_remote_models(self) -> list[str]:

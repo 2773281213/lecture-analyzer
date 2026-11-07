@@ -2,6 +2,7 @@
 
 新增一种接入方式：在 _ADAPTERS 里加一行"类型名 → 模块:类名"。
 同一接入方式下的新模型：只改 config.toml，不用动代码。
+档案配了 options.fallback 时，这里会把它包成 FallbackProvider：主模型拒答就换下一个档案。
 """
 
 from __future__ import annotations
@@ -23,6 +24,16 @@ def adapter_types() -> list[str]:
 
 
 def create_provider(profile: ModelProfile) -> LLMProvider:
+    provider = _build(profile)
+    fallback = profile.fallback_profile
+    if fallback is None:
+        return provider
+    from .fallback import FallbackProvider  # 延迟导入：多数档案没有备用
+
+    return FallbackProvider(provider, create_provider(fallback))
+
+
+def _build(profile: ModelProfile) -> LLMProvider:
     target = _ADAPTERS.get(profile.adapter)
     if target is None:
         raise LLMError(f"未知的适配器类型：{profile.adapter}（可选：{', '.join(_ADAPTERS)}）")

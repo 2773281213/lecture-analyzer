@@ -9,7 +9,9 @@ import anthropic
 import httpx2
 from pydantic import BaseModel
 
-from .base import Effort, ImagePart, LLMError, LLMProvider, ModelProfile, Part, TextPart, Usage, retry_transient
+from .base import (
+    Effort, ImagePart, LLMError, LLMProvider, ModelProfile, Part, RefusalError, TextPart, Usage, retry_transient,
+)
 
 # 服务端拒答回退（Anthropic 推荐默认开启）：请求被安全分类器拒绝时，由服务端换模型重跑。
 # 只在直连官方接口时启用；也可在模型档案里设置 options.refusal_fallback = false 手动关闭。
@@ -70,8 +72,11 @@ class AnthropicProvider(LLMProvider):
         usage = _to_usage(message.usage)
         if message.stop_reason == "refusal":
             details = getattr(message, "stop_details", None)
-            category = getattr(details, "category", None) or "未知"
-            raise LLMError(f"Claude 拒绝了这次请求（类别：{category}）", usage)
+            category = getattr(details, "category", None) or ""
+            raise RefusalError(
+                f"Claude 拒绝了这次请求（类别：{category or '未知'}）" + _fallback_hint(self.profile),
+                usage, category,
+            )
         if message.stop_reason == "max_tokens":
             raise LLMError(
                 f"输出达到 max_tokens（{max_tokens}）被截断，请调大模型档案「{self.profile.name}」的 max_output",
@@ -89,6 +94,13 @@ class AnthropicProvider(LLMProvider):
             return False
         base_url = self.profile.resolved_base_url()
         return base_url is None or OFFICIAL_HOST in base_url
+
+
+def _fallback_hint(profile: ModelProfile) -> str:
+    """没配备用档案时，告诉用户还可以怎么办（配了就不用说，FallbackProvider 会自己换）。"""
+    if profile.fallback_profile is not None:
+        return ""
+    return "；这类拒答与型号有关，换一个模型往往可以：在 config.toml 里给这个档案加 options.fallback = \"档案名\""
 
 
 def _final_message(api: Any, kwargs: dict[str, Any]) -> Any:

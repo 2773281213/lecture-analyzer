@@ -20,7 +20,7 @@ from ..knowledge import (
     CourseMemory, HistorySignal, KnowledgePoint, LectureCache, ResolvedIntegration, ResolvedKP, ResolvedReference,
 )
 from ..library import CheckedSignal, Course, Lecture, Library
-from ..llm import LLMProvider, TextPart
+from ..llm import LLMProvider, TextPart, billed_profile
 from ..llm.base import Effort
 from ..prompts import load_prompt
 from ..render import ROLE_LABELS, SIGNAL_LABELS, first_time
@@ -196,10 +196,11 @@ def integrate_lecture(ctx: IntegrateContext, course: Course, lecture: Lecture, a
         [TextPart(assembled.text), TextPart(ask)], IntegrationResult, system=system, effort=ctx.effort
     )
     resolved, stats = resolve(result.output, notes, lecture.seq, len(item.segments), tree)
-    memory.save_log(lecture.id, resolved, profile)
+    used = billed_profile(result, profile)  # 主模型拒答时由备用档案接手，记账和说明都按实际作答的档案
+    memory.save_log(lecture.id, resolved, used)
     memory.apply(course, lecture.id, resolved)
-    library.log_call(lecture.id, "integrate", profile, result.usage)
-    return stats.describe(profile.model) + trimmed_note(assembled.trimmed)
+    library.log_call(lecture.id, "integrate", used, result.usage)
+    return stats.describe(used.model) + trimmed_note(assembled.trimmed)
 
 
 def build_system_prompt(course: Course) -> str:

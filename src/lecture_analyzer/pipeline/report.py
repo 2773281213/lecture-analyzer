@@ -26,7 +26,7 @@ from ..books import export_course, export_report
 from ..config import AppConfig
 from ..exam_plans import ExamPlan, ExamPlanStore, plan_block
 from ..library import Course, Lecture, Library, LibraryError
-from ..llm import LLMError, TextPart, create_provider
+from ..llm import LLMError, TextPart, billed_profile, create_provider
 from ..materials import MaterialStore
 from ..prompts import load_prompt
 from ..reports import ReportStore
@@ -170,10 +170,11 @@ def _rank_with(ctx: ReportContext, library: Library, name: str, sections: list[S
     except Exception as exc:  # 多模型容错：一个模型失败不影响其他模型，失败原因写进报告
         report(f"{name} 排名失败：{type(exc).__name__}: {exc}")
         return ModelRun(name, error=f"{type(exc).__name__}: {exc}")
-    library.log_call(None, "report", profile, result.usage, course_id=ctx.course.id)
+    used = billed_profile(result, profile)
+    library.log_call(None, "report", used, result.usage, course_id=ctx.course.id)
     valid = {item.kp.key for item in ctx.scoring.ranked}
     ranking = resolve_ranking(result.output, valid, set(ctx.evidence.views), ctx.top_n, ctx.plan)
-    return ModelRun(name, profile.model, ranking, note=trimmed_note(assembled.trimmed))
+    return ModelRun(name, used.model, ranking, note=trimmed_note(assembled.trimmed))
 
 
 def resolve_ranking(output: KPRanking, valid_keys: set[int], valid_ids: set[str], top_n: int,

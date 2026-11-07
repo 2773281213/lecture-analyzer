@@ -21,7 +21,7 @@ from ..config import AppConfig
 from ..exam_plans import ExamPlanStore, plan_block
 from ..knowledge import CourseMemory, HistorySignal, KnowledgePoint, LectureCache, StoredReview
 from ..library import Course, Library
-from ..llm import LLMProvider, TextPart, create_provider
+from ..llm import LLMProvider, TextPart, billed_profile, create_provider
 from ..llm.base import Effort
 from ..prompts import load_prompt
 from ..render import ROLE_LABELS, SIGNAL_LABELS, group_by_chapter, quote_html, zh_aliases
@@ -330,8 +330,9 @@ def generate_review(ctx: ReviewContext, course: Course, planned: Sequence[Planne
             [TextPart(assembled.text), TextPart(ask)], ReviewChapter, system=system, effort=ctx.effort
         )
         stored = resolve_review(result.output, item.input)
-        memory.save_review(course.id, item.input.chapter, item.fingerprint, stored.model_dump_json(), profile)
-        ctx.library.log_call(None, "review", profile, result.usage, course_id=course.id)
+        used = billed_profile(result, profile)  # 主模型拒答时由备用档案接手
+        memory.save_review(course.id, item.input.chapter, item.fingerprint, stored.model_dump_json(), used)
+        ctx.library.log_call(None, "review", used, result.usage, course_id=course.id)
         missing = sum(not entry.generated for entry in stored.entries)
         note = f"{item.input.chapter}：{len(stored.entries)} 个知识点" + (f"（{missing} 个由程序补全）" if missing else "")
         ctx.report(note)

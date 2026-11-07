@@ -107,6 +107,30 @@ def test_abnormal_stop_raises(stop_reason, pattern):
     assert info.value.usage.output_tokens == 20
 
 
+def test_refusal_is_a_refusal_error_with_category():
+    """拒答要单独分类：FallbackProvider 靠它决定换下一个模型（实测病毒学第 4 讲 category=bio）。"""
+    from lecture_analyzer.llm import RefusalError
+
+    provider, _ = _provider(_message(stop_reason="refusal"))
+    with pytest.raises(RefusalError, match="拒绝") as info:
+        provider.generate_text([TextPart("你好")])
+    assert info.value.category == "cyber"  # _message() 的 stop_details
+    assert info.value.usage.output_tokens == 20
+
+
+def test_refusal_without_fallback_configured_explains_what_to_do():
+    provider, _ = _provider(_message(stop_reason="refusal"))
+    with pytest.raises(LLMError) as info:
+        provider.generate_text([TextPart("你好")])
+    assert "options.fallback" in str(info.value)
+
+    provider, _ = _provider(_message(stop_reason="refusal"), fallback_profile=make_profile(name="gpt"))
+    with pytest.raises(LLMError) as info:
+        provider.generate_text([TextPart("你好")])
+    assert "options.fallback" not in str(info.value)  # 已经配了备用模型，不用再提示
+
+
+
 def test_stream_interrupted_is_retried_and_api_errors_are_reported(monkeypatch):
     import anthropic
     import httpx
