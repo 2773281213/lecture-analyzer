@@ -110,7 +110,7 @@ def material_remove(
     config: ConfigOption = None,
 ) -> None:
     """删除一份资料（书库里的副本、识别结果和题目；原文件不受影响）。"""
-    from .pipeline.ingest import remove_material
+    from .pipeline.organize import delete_materials
 
     cfg = load_cfg(config)
     with friendly_errors(), open_library(cfg) as library:
@@ -120,11 +120,12 @@ def material_remove(
             raise LibraryError(f"编号 {material_id} 的资料不属于「{target.name}」")
         if not yes and not typer.confirm(f"删除「{material.title}」（{material.page_count} 页）及其识别结果？"):
             raise typer.Exit(1)
-        affected = MaterialStore(library).lectures_using(material_id)
-        remove_material(library, cfg.data_dir, material_id)
+        result = delete_materials(library, cfg.data_dir, target, [material])
     console.print(f"已删除「{escape(material.title)}」")
-    if affected:
-        console.print(f"[yellow]{len(affected)} 讲用到了这份资料，运行 `lec run {escape(course)}` 重新匹配课件[/yellow]")
+    if result.cancelled:
+        console.print("只处理这份资料的后台任务已取消：" + "、".join(f"#{job.id}" for job in result.cancelled))
+    if result.affected:
+        console.print(f"[yellow]{len(result.affected)} 讲用到了这份资料，运行 `lec run {escape(course)}` 重新匹配课件[/yellow]")
 
 
 # ---------------- 讲对应的课件页 ----------------

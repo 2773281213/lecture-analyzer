@@ -27,6 +27,7 @@ from ..config import AppConfig
 from ..exam_plans import ExamPlan, ExamPlanStore, plan_block
 from ..library import Course, Lecture, Library, LibraryError
 from ..llm import LLMError, TextPart, billed_profile, create_provider
+from ..locks import hold, memory_lock
 from ..materials import MaterialStore
 from ..prompts import load_prompt
 from ..reports import ReportStore
@@ -274,7 +275,8 @@ def save_report(library: Library, data_dir: Path, plan: ReportPlan, result: dict
               "models": plan.profiles}
     report_id = store.add(plan.course, title, params, result, plan.profiles)
     path = export_report(data_dir, plan.course, store.get(report_id))
-    export_course(library, data_dir, plan.course)  # book.json 里列出新报告
+    with hold(memory_lock(data_dir, plan.course.id)):  # 不和删除、移动讲同时导出（见 locks.py）
+        export_course(library, data_dir, plan.course)  # book.json 里列出新报告
     return report_id, path
 
 

@@ -51,8 +51,8 @@ from .forms import take_flash
 from .rendering import cite_links, evidence_url, kp_url, render_markdown
 from .themes import DARK_THEME, THEMES, spine_var, ui_prefs
 from .views import (
-    SORTS, course_view, job_view, jobs_view, lecture_state, lecture_view, material_view, report_view, review_view,
-    shelf_books,
+    SORTS, course_view, job_view, jobs_view, lecture_manage_state, lecture_state, lecture_view, material_view,
+    report_view, review_view, shelf_books,
 )
 
 __all__ = ["create_app", "render_markdown"]
@@ -163,7 +163,9 @@ def _register_pages(app: FastAPI, templates: Jinja2Templates, db_path: Path) -> 
     def lecture_page(request: Request, lecture_id: int, gate: int = 0, lecture: list[int] = Query(default=[]),
                      force: str = "") -> HTMLResponse:
         with Library(db_path) as library:
-            context = lecture_view(library, _lecture_or_404(library, lecture_id))
+            current = _lecture_or_404(library, lecture_id)
+            context = lecture_view(library, current)
+            context.update(lecture_manage_state(library, app.state.cfg.data_dir, current))
         context["gate"] = gate_request(gate, lecture, force)
         return templates.TemplateResponse(request, "lecture.html", context)
 

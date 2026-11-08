@@ -22,7 +22,7 @@ from ..llm.base import Effort
 from ..materials import ITEM_KINDS, Material, MaterialItem, MaterialStore, NewItem
 from ..prompts import load_prompt
 from ..schemas import ItemBatch, ItemMappingBatch, ItemOut, PageDigest
-from .ingest import digest_material
+from .ingest import digest_material, material_held
 from .integrate import parse_key
 from .memory import snippet
 
@@ -73,11 +73,15 @@ def process_materials(
 
 
 def _process_one(cfg: AppConfig, library: Library, store: MaterialStore, material: Material, report: Report) -> None:
-    if store.get(material.id).step_state("digest") != "done":
-        report(f"识别「{material.title}」（{material.page_count} 页）…")
-        digest_material(cfg, library, store.get(material.id), report)
-    if material.kind in ITEM_KINDS:
-        ensure_items(cfg, library, store.get(material.id), report)
+    """拿着资料锁处理一份资料；排队或处理别的资料期间它被删除了时跳过。"""
+    with material_held(cfg, library, material, report) as current:
+        if current is None:
+            return
+        if current.step_state("digest") != "done":
+            report(f"识别「{current.title}」（{current.page_count} 页）…")
+            digest_material(cfg, library, current, report)
+        if current.kind in ITEM_KINDS:
+            ensure_items(cfg, library, store.get(current.id), report)
 
 
 def ensure_items(cfg: AppConfig, library: Library, material: Material, report: Report = print) -> None:
@@ -108,20 +112,23 @@ def ensure_mapped(cfg: AppConfig, library: Library, course: Course, report: Repo
     fingerprint = memory_fingerprint(tree)
     store = MaterialStore(library)
     done = 0
-    for material in store.list(course, ITEM_KINDS):
-        if material.step_state("items") != "done" or mapping_fresh(material, fingerprint):
+    for listed in store.list(course, ITEM_KINDS):
+        if listed.step_state("items") != "done" or mapping_fresh(listed, fingerprint):
             continue
-        profile = cfg.profile_for_step("material")
-        items = store.items(material.id)
-        report(f"把「{material.title}」的 {len(items)} 条对应到课程知识点…")
-        mapping, usage = map_items(create_provider(profile), tree, items, course.settings.subject, material,
-                                   effort=cfg.effort_for_step("material"))
-        store.set_item_kps(material.id, mapping)
-        library.log_call(None, "material", profile, usage, course_id=course.id)
-        linked = sum(1 for keys in mapping.values() if keys)
-        store.set_step(material.id, "kp_map", "done", f"{linked}/{len(items)} 条对应到知识点（{profile.model}）",
-                       fingerprint=fingerprint)
-        done += 1
+        with material_held(cfg, library, listed, report) as material:  # 资料锁：对应期间不会被删除
+            if material is None or material.step_state("items") != "done" or mapping_fresh(material, fingerprint):
+                continue
+            profile = cfg.profile_for_step("material")
+            items = store.items(material.id)
+            report(f"把「{material.title}」的 {len(items)} 条对应到课程知识点…")
+            mapping, usage = map_items(create_provider(profile), tree, items, course.settings.subject, material,
+                                       effort=cfg.effort_for_step("material"))
+            store.set_item_kps(material.id, mapping)
+            library.log_call(None, "material", profile, usage, course_id=course.id)
+            linked = sum(1 for keys in mapping.values() if keys)
+            store.set_step(material.id, "kp_map", "done", f"{linked}/{len(items)} 条对应到知识点（{profile.model}）",
+                           fingerprint=fingerprint)
+            done += 1
     return done
 
 

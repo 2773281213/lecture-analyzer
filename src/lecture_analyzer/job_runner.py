@@ -32,6 +32,7 @@ from typing import IO
 from .config import AppConfig
 from .jobs import LANES, JobStore
 from .library import Library, LibraryError
+from .locks import lock_file, unlock_file
 from .proc import NO_WINDOW
 
 POLL_SECONDS = 2.0  # 队列线程没被唤醒时，隔这么久查一次任务表
@@ -62,7 +63,7 @@ class RunnerLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         file = self.path.open("a+b")
         try:
-            _lock(file)
+            lock_file(file)
         except OSError:  # 别的进程拿着锁
             file.close()
             return False
@@ -73,29 +74,9 @@ class RunnerLock:
         if self.file is None:
             return
         with suppress(OSError):
-            _unlock(self.file)
+            unlock_file(self.file)
         self.file.close()
         self.file = None
-
-
-if os.name == "nt":
-    import msvcrt
-
-    def _lock(file: IO[bytes]) -> None:
-        file.seek(0)
-        msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
-
-    def _unlock(file: IO[bytes]) -> None:
-        file.seek(0)
-        msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
-else:
-    import fcntl
-
-    def _lock(file: IO[bytes]) -> None:
-        fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-    def _unlock(file: IO[bytes]) -> None:
-        fcntl.flock(file.fileno(), fcntl.LOCK_UN)
 
 
 def kill_tree(process: subprocess.Popen[bytes]) -> None:

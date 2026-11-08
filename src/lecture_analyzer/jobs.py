@@ -10,6 +10,8 @@
 - 重试：失败或已取消的任务按同样的参数重新提交一个新任务（旧任务留在列表里，看得出失败原因）；
 - 清理：删除失败和已取消的任务记录（只是任务记录：已处理好的内容、已完成的步骤都不在任务表里，不受影响）；
 - 书架关闭（或上次意外退出）时没做完的任务标为已暂停，打开后点「继续」接着做；已暂停的任务保持暂停。
+- 任务没结束时照样可以删除、移动其他讲，追加节，删除其他资料：只有正在处理或点名用到那一讲、那份资料的任务才挡住
+  （此刻正在处理的由锁判断，见 locks.py）；删除整门课仍要等这门课的任务都结束。
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from .library import Course, Library, LibraryError
+from .library import Course, Lecture, Library, LibraryError
 
 
 @dataclass(frozen=True)
@@ -236,12 +238,70 @@ def unfinished_jobs(library: Library, course: Course) -> list[Job]:
 
 
 def ensure_idle(library: Library, course: Course, action: str) -> None:
-    """删除、移动之前：这门课不能有还没结束的任务（任务进程正在读写这些数据）。"""
+    """删除整门课之前：这门课不能有还没结束的任务（任务进程正在读写这些数据）。"""
     jobs = unfinished_jobs(library, course)
     if jobs:
         names = "、".join(f"#{job.id} {job.label}" for job in jobs[:3])
         raise LibraryError(f"「{course.name}」还有没结束的后台任务（{names}），请等它们完成或取消后再{action}"
                            "（书架关闭时没做完的任务会变成已暂停，在「后台任务」里继续或取消即可）")
+
+
+# ---------- 删除或移动一讲、删除资料时：只看真正用到它的任务 ----------
+# 处理讲、处理资料的任务不算：它们跳过已删除的讲和资料，此刻正在处理的那一讲、那份资料由锁挡住（locks.py）。
+
+READING_KINDS = ("report", "review", "qa")  # 进行中时正在读这门课的笔记、资料和课程记忆
+
+
+def lecture_blockers(library: Library, lecture: Lecture) -> list[Job]:
+    """删除或移动一讲之前，会因此出错的、还没结束的任务：点名用到这一讲的（考试方案的来源讲、限定这一讲的问答、
+    选了这一讲的考前报告、导入后固定到这一讲的课件），以及这门课正在进行的考前报告、总复习和问答。"""
+    course = library.course_by_id(lecture.course_id)
+    return [job for job in unfinished_jobs(library, course) if _reading(job) or _names_lecture(job, lecture)]
+
+
+def reading_jobs(library: Library, course: Course) -> list[Job]:
+    """这门课正在进行的考前报告、总复习和问答（例如把一讲移进这门课之前要等它们）。"""
+    return [job for job in JobStore(library).active_jobs(course) if _reading(job)]
+
+
+def material_blockers(library: Library, course: Course, material_id: int) -> list[Job]:
+    """删除一份资料之前，会因此出错的、还没结束的任务：选了这份资料的考前报告，以及这门课正在进行的考前报告、
+    总复习和问答。"""
+    return [job for job in unfinished_jobs(library, course)
+            if _reading(job) or (job.kind == "report" and material_id in _ids(job.params.get("materials")))]
+
+
+def ensure_unblocked(jobs: Sequence[Job], what: str, action: str) -> None:
+    if jobs:
+        names = "、".join(f"#{job.id} {job.label}" for job in jobs[:3])
+        raise LibraryError(f"{what}正被后台任务用到（{names}），请等它们完成，或在「后台任务」里取消后再{action}")
+
+
+def cancel_orphans(library: Library, course: Course, kind: str, key: str, target_id: int) -> list[Job]:
+    """只处理这一讲（这份资料）、还没开始或已暂停的任务：删除之后没有意义了，取消并返回它们。
+    调用方已经拿着这一讲（这份资料）的锁，任务即使恰好开始，也只会发现它已被删除。"""
+    store = JobStore(library)
+    orphans = [job for job in unfinished_jobs(library, course)
+               if job.kind == kind and job.state != "running" and _ids(job.params.get(key)) == [target_id]]
+    return [job for job in orphans if store.cancel(job.id)]
+
+
+def _reading(job: Job) -> bool:
+    return job.state == "running" and job.kind in READING_KINDS
+
+
+def _names_lecture(job: Job, lecture: Lecture) -> bool:
+    params = job.params
+    if job.kind == "report":  # 考前报告按讲次选讲
+        return lecture.seq in _ids(params.get("lectures"))
+    key = {"exam_plan": "lecture", "qa": "lecture_id", "import_material": "pin_lecture"}.get(job.kind)
+    return key is not None and lecture.id in _ids(params.get(key))
+
+
+def _ids(value: Any) -> list[int]:
+    """任务参数里的编号（单个、列表或空）。"""
+    values = value if isinstance(value, list) else [value]
+    return [int(v) for v in values if v not in (None, "") and str(v).isdigit()]
 
 
 def _job(row: Any) -> Job:

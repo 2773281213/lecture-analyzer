@@ -1,5 +1,6 @@
 """网页里管理讲：添加一讲（可附一份固定对应的课件、添加后立即处理）、修改标题日期和类型、追加一节、
-处理或从某一步重做、手动指定课件页、删除一讲。耗时的操作都提交成后台任务。"""
+处理或从某一步重做、手动指定课件页、删除一讲。耗时的操作都提交成后台任务。
+后台任务在处理别的讲时，这一讲照样可以追加节、删除（只有正在处理这一讲时不行，见 locks.py）。"""
 
 from __future__ import annotations
 
@@ -10,8 +11,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from ..books import export_course
-from ..jobs import ensure_idle
-from ..library import LECTURE_KINDS
+from ..library import LECTURE_KINDS, LibraryError
+from ..locks import UI_WAIT, hold, lecture_lock, memory_lock
 from ..materials import MaterialStore
 from ..pipeline.organize import delete_lecture, next_free_seq
 from ..pipeline.slides import parse_page_spec
@@ -61,11 +62,17 @@ async def add_lecture(request: Request, course_id: int) -> RedirectResponse:
 async def edit_lecture(request: Request, lecture_id: int) -> RedirectResponse:
     form = await read_form(request)
     fields = _lecture_fields(form)
+    data_dir = request.app.state.cfg.data_dir
     with library_of(request) as library:
         lecture = library.lecture_by_id(lecture_id)
         library.update_lecture(lecture_id, **fields)
         if lecture.step_state("book") == "done":  # 已上架的讲重新导出，标题等跟着更新
-            export_course(library, request.app.state.cfg.data_dir, library.course_by_id(lecture.course_id))
+            course = library.course_by_id(lecture.course_id)
+            try:
+                with hold(memory_lock(data_dir, course.id), wait=UI_WAIT):
+                    export_course(library, data_dir, course)
+            except LibraryError:  # 后台任务正在整合课程记忆或导出：它导出时会带上新的标题
+                flash(request, "已保存。后台任务正在导出这门课，导出的文件会在它导出时一起更新")
     return redirect(f"/lectures/{lecture_id}#manage")
 
 
@@ -75,9 +82,10 @@ async def add_parts(request: Request, lecture_id: int) -> RedirectResponse:
     media = path_list(form.get("paths", ""), "录音或录像文件", files_only=True)
     with library_of(request) as library:
         lecture = library.lecture_by_id(lecture_id)
-        ensure_idle(library, library.course_by_id(lecture.course_id), "追加节")
-        for path in media:
-            lecture = library.add_part(lecture_id, path)
+        busy = f"第 {lecture.seq} 讲正在后台处理，请等这一讲处理完，或在「后台任务」里暂停后再追加节"
+        with hold(lecture_lock(request.app.state.cfg.data_dir, lecture_id), wait=0, busy=busy):
+            for path in media:
+                lecture = library.add_part(lecture_id, path)
     flash(request, f"已追加 {len(media)} 节，现在共 {len(lecture.parts)} 节。点「处理」重新处理这一讲（已转写的节不会重新转写）")
     return redirect(f"/lectures/{lecture_id}#manage")
 
@@ -127,8 +135,10 @@ async def remove_lecture(request: Request, lecture_id: int) -> RedirectResponse:
         raise HTTPException(400, "请先勾选确认，再删除")
     with library_of(request) as library:
         lecture = library.lecture_by_id(lecture_id)
-        stale = delete_lecture(library, request.app.state.cfg.data_dir, lecture)
-    note = ("；这些讲的课程记忆待更新：" + "、".join(f"第 {x.seq} 讲" for x in stale) + "（在课程页点「重建课程记忆」）"
-            if stale else "")
+        result = delete_lecture(library, request.app.state.cfg.data_dir, lecture)
+    note = ("；这些讲的课程记忆待更新：" + "、".join(f"第 {x.seq} 讲" for x in result.stale)
+            + "（在课程页点「重建课程记忆」）" if result.stale else "")
+    if result.cancelled:
+        note += "；只处理这一讲的后台任务已取消：" + "、".join(f"#{job.id}" for job in result.cancelled)
     flash(request, f"已删除第 {lecture.seq} 讲（原始音视频没有删除）{note}")
     return redirect(f"/courses/{lecture.course_id}")

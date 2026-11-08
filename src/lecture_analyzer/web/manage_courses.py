@@ -11,10 +11,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from ..asr import ASR_BACKENDS, language_problem
 from ..config import AppConfig
 from ..course import LANGUAGE_NAMES, CourseSettings, SettingsError, build_settings
-from ..jobs import ensure_idle
 from ..library import Course, Library
 from ..materials import MATERIAL_KINDS, Material, MaterialStore
-from ..pipeline.ingest import remove_material
+from ..pipeline import organize
 from ..pipeline.organize import delete_course, rerun_step_for_settings
 from ..pipeline.run import STEP_LABELS
 from .forms import (
@@ -220,15 +219,13 @@ async def delete_materials(request: Request, course_id: int) -> RedirectResponse
 
 
 def _remove_materials(request: Request, library: Library, course: Course, materials: list[Material]) -> None:
-    """删除资料（这门课不能有没结束的任务），提示删了什么、哪些讲下次处理时要重新匹配课件。原文件不受影响。"""
-    ensure_idle(library, course, "删除资料")
-    store = MaterialStore(library)
-    affected: set[int] = set()
-    for material in materials:
-        affected.update(store.lectures_using(material.id))
-        remove_material(library, request.app.state.cfg.data_dir, material.id)
+    """删除资料，提示删了什么、哪些讲下次处理时要重新匹配课件。原文件不受影响。
+    后台任务在处理别的讲和资料时也可以删除（见 organize.delete_materials）。"""
+    result = organize.delete_materials(library, request.app.state.cfg.data_dir, course, materials)
     single = len(materials) == 1
     what = f"「{materials[0].title}」" if single else f" {len(materials)} 份"
-    note = (f"；{len(affected)} 讲用到了{'这份' if single else '这些'}资料，下次处理时会重新匹配课件"
-            if affected else "")
+    note = (f"；{len(result.affected)} 讲用到了{'这份' if single else '这些'}资料，下次处理时会重新匹配课件"
+            if result.affected else "")
+    if result.cancelled:
+        note += "；只处理这些资料的后台任务已取消：" + "、".join(f"#{job.id}" for job in result.cancelled)
     flash(request, f"已删除资料{what}{note}")

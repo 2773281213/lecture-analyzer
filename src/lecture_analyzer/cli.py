@@ -356,11 +356,13 @@ def lecture_remove(
         lecture = library.lecture(library.course(course), seq)
         if not yes and not typer.confirm(f"删除「{course}」第 {seq} 讲的全部数据？原始音视频不会删除"):
             raise typer.Exit(1)
-        stale = delete_lecture(library, cfg.data_dir, lecture)
+        result = delete_lecture(library, cfg.data_dir, lecture)
     console.print(f"已删除「{escape(course)}」第 {seq} 讲")
-    if stale:
+    if result.cancelled:
+        console.print("只处理这一讲的后台任务已取消：" + "、".join(f"#{job.id}" for job in result.cancelled))
+    if result.stale:
         console.print(f"[yellow]这些讲的课程记忆待更新，运行 `lec rebuild {escape(course)}`：" +
-                      "、".join(f"第 {x.seq} 讲" for x in stale) + "[/yellow]")
+                      "、".join(f"第 {x.seq} 讲" for x in result.stale) + "[/yellow]")
 
 
 @lecture_app.command("list")

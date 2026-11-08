@@ -8,9 +8,10 @@ from typing import Any, Sequence
 from ..books import lecture_media_type, media_type
 from ..config import AppConfig
 from ..config_edit import STEP_LABELS as CONFIG_STEP_LABELS
-from ..jobs import Job, JobStore, unfinished_jobs
+from ..jobs import Job, JobStore, lecture_blockers, material_blockers
 from ..knowledge import CourseMemory, HistorySignal, KnowledgePoint, LectureCache
 from ..library import CheckedSignal, Course, Lecture, Library, PageRef
+from ..locks import is_free, lecture_lock, material_lock
 from ..materials import ITEM_KINDS, PAGE_KINDS, Material, MaterialStore
 from ..pipeline.ingest import page_image
 from ..pipeline.integrate import match_signal_note
@@ -134,7 +135,6 @@ def course_view(library: Library, course: Course, tag: str | None, cfg: AppConfi
         "reports": ReportStore(library).list(course)[:20],
         "jobs": JobStore(library).recent(course),
         "active_jobs": JobStore(library).active_jobs(course),
-        "busy_jobs": len(unfinished_jobs(library, course)),  # 有没结束的任务时不能删除资料
         "next_seq": next_free_seq(library, course),
         "models": ready,
         "default_model": cfg.steps.get("report", ""),
@@ -208,6 +208,30 @@ class KeySignal:
     item: CheckedSignal  # 校验过的信号
     kp: int | None  # 本讲第几个知识点（从 1 数），没有对应时为 None
     priority: int  # 重要程度，见 review.signal_priority
+
+
+def _job_names(jobs: Sequence[Job]) -> str:
+    return "、".join(f"#{job.id} {job.label}" for job in jobs[:3])
+
+
+def lecture_manage_state(library: Library, data_dir: Any, lecture: Lecture) -> dict[str, Any]:
+    """这一讲现在能不能追加节、删除或移动：后台正在处理这一讲时都不行；有任务点名用到它时不能删除或移动。
+    后台任务在处理别的讲时都可以（提交时还会再检查一次）。"""
+    processing = not is_free(lecture_lock(data_dir, lecture.id))
+    if processing:
+        block = "这一讲正在后台处理，处理完（或在「后台任务」里暂停）后才能删除或移动"
+    else:
+        jobs = lecture_blockers(library, lecture)
+        block = f"后台任务 {_job_names(jobs)} 完成（或取消）后才能删除或移动这一讲" if jobs else ""
+    return {"lecture_processing": processing, "manage_block": block}
+
+
+def material_delete_block(library: Library, data_dir: Any, course: Course, material: Material) -> str:
+    """这份资料现在不能删除的原因（空表示可以）。"""
+    if not is_free(material_lock(data_dir, material.id)):
+        return "这份资料正在后台处理（识别、拆题或对应知识点），处理完（或在「后台任务」里暂停）后才能删除"
+    jobs = material_blockers(library, course, material.id)
+    return f"后台任务 {_job_names(jobs)} 完成（或取消）后才能删除这份资料" if jobs else ""
 
 
 def lecture_view(library: Library, lecture: Lecture) -> dict[str, Any]:
@@ -327,7 +351,7 @@ def material_view(library: Library, data_dir: Any, material: Material) -> dict[s
         "items": [(item, [(key, names.get(key, "")) for key in item.kp_keys]) for item in store.items(material.id)],
         "stale": material.id in {m.id for m in stale_materials(library, course)},
         "unfinished": unfinished(material),
-        "busy_jobs": len(unfinished_jobs(library, course)),  # 有没结束的任务时不能删除
+        "delete_block": material_delete_block(library, data_dir, course, material),
         "lectures": sorted(using, key=lambda lecture: lecture.seq),
         "ITEM_TYPES": ITEM_TYPES,
     }

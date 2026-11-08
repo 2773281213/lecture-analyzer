@@ -214,9 +214,9 @@
             {% for c in other_courses %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
           </select>
           <input name="seq" inputmode="numeric" pattern="[0-9]*" placeholder="第几讲（可不填）" aria-label="在新课程里是第几讲">
-          <button class="button">移过去</button>
+          <button class="button"{{ " disabled" if manage_block }}>移过去</button>
         </form>
-        <p class="muted small">移动后在这一讲的页面点「处理」重新处理；两门课里排在它后面的讲，课程记忆会标记为待更新。</p>
+        <p class="muted small">{{ manage_block or "移动后在这一讲的页面点「处理」重新处理；两门课里排在它后面的讲，课程记忆会标记为待更新。" }}</p>
       </div>
       {% endif %}
     </div>
@@ -242,7 +242,7 @@
         <p class="field-label">现在共 {{ lecture.parts | length }} 节</p>
         <ol class="part-files">{% for part in lecture.parts %}<li class="small">{{ part.media_path }}</li>{% endfor %}</ol>
         {{ paths_field("paths", "追加一节（按顺序接在后面）", pick="files", types="media", rows=2, key="part-paths") }}
-        <p class="form-actions"><button class="button">追加</button><span class="muted small">已转写的节不会重新转写</span></p>
+        <p class="form-actions"><button class="button"{{ " disabled" if lecture_processing }}>追加</button><span class="muted small">{{ "这一讲正在后台处理，处理完（或暂停）后才能追加节" if lecture_processing else "已转写的节不会重新转写" }}</span></p>
       </form>
 
       <div>
@@ -271,8 +271,9 @@
         {{ csrf_field() }}
         <p class="field-label">删除这一讲</p>
         <p class="small">删除转写、笔记、导出文件和中间文件；原始音视频不会删除。后面整合过的讲会标记为课程记忆待更新。</p>
+        {% if manage_block %}<p class="muted small">{{ manage_block }}；后台任务在处理别的讲时可以删除。</p>{% endif %}
         <label class="check-label"><input type="checkbox" name="confirm" value="1" required> 确认删除</label>
-        <p class="form-actions"><button class="button button-danger">删除第 {{ lecture.seq }} 讲</button></p>
+        <p class="form-actions"><button class="button button-danger"{{ " disabled" if manage_block }}>删除第 {{ lecture.seq }} 讲</button></p>
       </form>
     </div>
   </section>

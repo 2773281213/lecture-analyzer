@@ -12,7 +12,8 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
-from collections.abc import Callable, Sequence
+from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,7 @@ from ..config import AppConfig
 from ..documents import DocPage, images_to_pdf, iter_pages
 from ..library import Course, Library, LibraryError, PageRef
 from ..llm import Usage, create_provider
+from ..locks import hold, material_lock, materials_lock
 from ..materials import PAGE_KINDS, Material, MaterialStore
 from ..schemas import PageDigest
 from .page_digest import digest_pages
@@ -58,30 +60,32 @@ def import_materials(
     """导入文件、文件夹或压缩包：每个文档成为一份资料，复制进书库目录并拆页（不调用模型）。
 
     同一门课、同一类型、同一来源、内容没变的文档已经导入过时沿用原来的资料，不重复导入：
-    导入任务被暂停、取消或书架被关闭后再继续、重试，只导入还没导入的文档。"""
-    store = MaterialStore(library)
-    staging_root = data_dir / "work" / "import"
-    staging_root.mkdir(parents=True, exist_ok=True)
-    result = ImportResult()
-    with tempfile.TemporaryDirectory(dir=staging_root) as staging:
-        expanded = expand([Path(item) for item in inputs], Path(staging))
-        result.skipped = expanded.skipped
-        if not expanded.documents:
-            reasons = "；".join(f"{source}：{reason}" for source, reason in expanded.skipped[:5])
-            raise LibraryError("没有找到可以导入的文档" + (f"（{reasons}）" if reasons else ""))
-        for document in expanded.documents:
-            material = _imported_before(library, data_dir, course, kind, document)
-            if material is not None:
-                result.reused += 1
-                report(f"「{material.title}」之前已导入，沿用原来的（{material.page_count} 页）")
-            else:
-                name = title if title and len(expanded.documents) == 1 else document.title
-                # 重新读取课程：删掉残缺资料可能改了课程的课件状态
-                material = _import_one(store, data_dir, library.course_by_id(course.id), kind, name, document)
-                report(f"已导入「{material.title}」：{material.page_count} 页")
-            result.materials.append(material)
-    if kind in PAGE_KINDS and result.reused < len(result.materials):  # 全是沿用的，课件没变，不用重新匹配
-        mark_rematch(library, store, course)
+    导入任务被暂停、取消或书架被关闭后再继续、重试，只导入还没导入的文档。
+    导入期间拿着这门课的资料导入锁（见 locks.py），不和删除资料同时进行。"""
+    with hold(materials_lock(data_dir, course.id), on_wait=lambda: report("等这门课的资料删除操作结束…")):
+        store = MaterialStore(library)
+        staging_root = data_dir / "work" / "import"
+        staging_root.mkdir(parents=True, exist_ok=True)
+        result = ImportResult()
+        with tempfile.TemporaryDirectory(dir=staging_root) as staging:
+            expanded = expand([Path(item) for item in inputs], Path(staging))
+            result.skipped = expanded.skipped
+            if not expanded.documents:
+                reasons = "；".join(f"{source}：{reason}" for source, reason in expanded.skipped[:5])
+                raise LibraryError("没有找到可以导入的文档" + (f"（{reasons}）" if reasons else ""))
+            for document in expanded.documents:
+                material = _imported_before(library, data_dir, course, kind, document)
+                if material is not None:
+                    result.reused += 1
+                    report(f"「{material.title}」之前已导入，沿用原来的（{material.page_count} 页）")
+                else:
+                    name = title if title and len(expanded.documents) == 1 else document.title
+                    # 重新读取课程：删掉残缺资料可能改了课程的课件状态
+                    material = _import_one(store, data_dir, library.course_by_id(course.id), kind, name, document)
+                    report(f"已导入「{material.title}」：{material.page_count} 页")
+                result.materials.append(material)
+        if kind in PAGE_KINDS and result.reused < len(result.materials):  # 全是沿用的，课件没变，不用重新匹配
+            mark_rematch(library, store, course)
     return result
 
 
@@ -270,10 +274,22 @@ def digest_materials(
 ) -> list[Material]:
     """识别其中还没识别完的资料，返回本次处理过的资料。"""
     processed = []
-    for material in materials:
-        if material.step_state("digest") == "done":
+    for listed in materials:
+        if listed.step_state("digest") == "done":
             continue
-        report(f"识别资料「{material.title}」（{material.page_count} 页）…")
-        digest_material(cfg, library, material, report)
-        processed.append(material)
+        with material_held(cfg, library, listed, report) as material:
+            if material is None or material.step_state("digest") == "done":
+                continue
+            report(f"识别资料「{material.title}」（{material.page_count} 页）…")
+            digest_material(cfg, library, material, report)
+            processed.append(material)
     return processed
+
+
+@contextmanager
+def material_held(cfg: AppConfig, library: Library, material: Material, report: Report) -> Iterator[Material | None]:
+    """拿着这份资料的资料锁处理它（见 locks.py），给出重新读取的资料；等锁期间资料被删除了时给出 None。"""
+    with hold(material_lock(cfg.data_dir, material.id),
+              on_wait=lambda: report(f"等「{material.title}」的其他操作结束…")):
+        found = MaterialStore(library).existing([material.id])
+        yield found[0] if found else None

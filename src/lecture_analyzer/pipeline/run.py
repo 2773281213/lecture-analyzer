@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -26,6 +27,7 @@ from ..exam_plans import ExamPlanStore, plan_block
 from ..knowledge import CourseMemory
 from ..library import Course, Lecture, LecturePart, Library, LibraryError, PageRef
 from ..llm import ModelProfile, Usage, create_provider
+from ..locks import hold, lecture_lock, memory_lock
 from ..materials import PAGE_KINDS, MaterialStore
 from ..media import extract_audio, wav_duration_ms
 from ..schemas import PageDigest
@@ -58,6 +60,7 @@ STEP_DEPS: dict[str, tuple[str, ...]] = {
     "book": ("integrate",),
 }
 FINISHED = ("done", "skipped")
+COURSE_WIDE_STEPS = ("integrate", "book")  # 重写这门课的课程记忆、导出整门课：拿着课程记忆锁做（见 locks.py）
 GAP_WARNING_MS = 120_000  # 转写中超过 2 分钟没有内容时提醒（可能漏转）
 
 
@@ -102,16 +105,24 @@ class LectureRunner:
             if step == "extract":  # 方案关卡：没确认时抛出 AwaitingExamPlan，这一步不记为失败
                 self.course = ensure_exam_plan(self.cfg, self.library, self.course, self.report)
             self.report(f"开始「{STEP_LABELS[step]}」…")
-            try:
-                state, detail = getattr(self, f"_step_{step}")()
-            except Exception as exc:  # 记录失败原因后照常抛出，交给调用方处理
-                self.library.set_step(self.lecture_id, step, "failed", f"{type(exc).__name__}: {exc}")
-                raise
-            self.library.set_step(self.lecture_id, step, state, detail)
+            with self._course_wide(step):  # 连同步骤状态一起写完才放开，删除讲时看到的状态是一致的
+                try:
+                    state, detail = getattr(self, f"_step_{step}")()
+                except Exception as exc:  # 记录失败原因后照常抛出，交给调用方处理
+                    self.library.set_step(self.lecture_id, step, "failed", f"{type(exc).__name__}: {exc}")
+                    raise
+                self.library.set_step(self.lecture_id, step, state, detail)
             if step not in self._unchanged:
                 self._executed.add(step)
             self.report(f"完成「{STEP_LABELS[step]}」：{detail}")
         return self.lecture
+
+    def _course_wide(self, step: str) -> AbstractContextManager[None]:
+        """整合课程记忆和上架拿着这门课的课程记忆锁：不和删除、移动讲同时改课程记忆和导出文件。"""
+        if step not in COURSE_WIDE_STEPS:
+            return nullcontext()
+        return hold(memory_lock(self.cfg.data_dir, self.course.id),
+                    on_wait=lambda: self.report("等这门课的其他操作（删除、移动讲等）结束…"))
 
     def _needs(self, step: str) -> bool:
         return (
@@ -306,18 +317,43 @@ def process_lectures(
 
     lectures 为 None 时处理这门课所有没完成的讲；强制重跑某一步时为全部讲。announce 在开始处理每一讲前调用。
     考试方案还没确认时，处理到整理笔记前停下并抛出 AwaitingExamPlan（调用方当作"等待确认"而不是失败）。
+    处理每一讲时拿着它的讲锁（见 locks.py）：这一讲不会在处理中途被删除或移走，其他讲照常可以。
     """
     check_slides_choice(course)  # 课件关卡：先选择是否提供课件
     processed = 0
     for lecture in lectures if lectures is not None else library.lectures(course):
-        # 处理前一讲可能把后面的讲标记为课程记忆待更新，所以到这一讲时再判断要不要处理
-        current = library.lecture_by_id(lecture.id)
-        if lectures is None and not options.force and all(current.step_state(step) in FINISHED for step in STEPS):
-            continue
-        announce(current)
-        LectureRunner(cfg, library, current, options, report=report).run()
-        processed += 1
+        with hold(lecture_lock(cfg.data_dir, lecture.id),
+                  on_wait=lambda: report(f"等第 {lecture.seq} 讲的其他操作（删除、追加节等）结束…")):
+            # 处理前一讲可能把后面的讲标记为课程记忆待更新，所以到这一讲时再判断要不要处理；
+            # 处理前面几讲时，这一讲可能已被删除，或已移到别的课程（处理整门课时不再管它）
+            current = _current(library, lecture, course if lectures is None else None)
+            if current is None:
+                continue
+            if lectures is None and not options.force and all(current.step_state(step) in FINISHED for step in STEPS):
+                continue
+            announce(current)
+            LectureRunner(cfg, library, current, options, report=report).run()
+            processed += 1
     return processed
+
+
+def existing_lectures(library: Library, lecture_ids: Sequence[int]) -> list[Lecture]:
+    """这些编号里还在的讲（任务排队时，其中的讲可能已被删除）。"""
+    found = []
+    for lecture_id in lecture_ids:
+        try:
+            found.append(library.lecture_by_id(lecture_id))
+        except LibraryError:
+            continue
+    return found
+
+
+def _current(library: Library, lecture: Lecture, course: Course | None) -> Lecture | None:
+    """重新读取这一讲；已被删除、或不在 course 里了（给了 course 时）返回 None。"""
+    found = existing_lectures(library, [lecture.id])
+    if not found or (course is not None and found[0].course_id != course.id):
+        return None
+    return found[0]
 
 
 def integrate_context(
@@ -334,17 +370,19 @@ def rebuild_course(
     cfg: AppConfig, library: Library, course: Course, from_seq: int | None = None, model: str | None = None,
     report: Callable[[str], None] = print,
 ) -> IntegrateOutcome | None:
-    """重建课程记忆并重新导出（命令行和后台任务共用）；已是最新时返回 None，不调用模型。"""
-    planned = plan_rebuild(library, CourseMemory(library), course, from_seq)
-    if not planned:
-        return None
-    report(f"将调用模型整合 {len(planned)} 讲：" + "、".join(f"第 {x.seq} 讲" for x in planned))
-    outcome = rebuild(integrate_context(cfg, library, model, report), course, from_seq)
-    if outcome is None:
-        return None
-    for lecture in outcome.integrated:
-        report(f"第 {lecture.seq} 讲：{outcome.details[lecture.id]}")
-    export_course(library, cfg.data_dir, course)
+    """重建课程记忆并重新导出（命令行和后台任务共用）；已是最新时返回 None，不调用模型。
+    整个过程拿着这门课的课程记忆锁（见 locks.py）。"""
+    with hold(memory_lock(cfg.data_dir, course.id), on_wait=lambda: report("等这门课的其他操作（删除、移动讲等）结束…")):
+        planned = plan_rebuild(library, CourseMemory(library), course, from_seq)
+        if not planned:
+            return None
+        report(f"将调用模型整合 {len(planned)} 讲：" + "、".join(f"第 {x.seq} 讲" for x in planned))
+        outcome = rebuild(integrate_context(cfg, library, model, report), course, from_seq)
+        if outcome is None:
+            return None
+        for lecture in outcome.integrated:
+            report(f"第 {lecture.seq} 讲：{outcome.details[lecture.id]}")
+        export_course(library, cfg.data_dir, course)
     return outcome
 
 

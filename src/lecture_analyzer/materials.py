@@ -116,6 +116,16 @@ class MaterialStore:
             raise LibraryError(f"没有编号为 {material_id} 的资料，可用 `lec material list 课程` 查看")
         return _material(row)
 
+    def existing(self, material_ids: Sequence[int]) -> list[Material]:
+        """这些编号里还在的资料，按给出的顺序（任务排队或处理期间，其中的资料可能已被删除）。"""
+        found = []
+        for material_id in material_ids:
+            try:
+                found.append(self.get(material_id))
+            except LibraryError:
+                continue
+        return found
+
     def list(self, course: Course, kinds: Sequence[str] | None = None) -> list[Material]:
         rows = self.conn.execute("SELECT * FROM material WHERE course_id = ? ORDER BY position, id", (course.id,))
         materials = [_material(row) for row in rows]
@@ -235,13 +245,14 @@ class MaterialStore:
         return [LecturePage(PageRef(row["material_id"], row["page_no"]), row["source"]) for row in rows]
 
     def set_lecture_pages(self, lecture_id: int, refs: Iterable[PageRef], source: str) -> None:
-        """覆盖这一讲对应的全部课件页。"""
+        """覆盖这一讲对应的全部课件页；匹配期间被删除的资料的页跳过。"""
         if source not in PAGE_SOURCES:
             raise LibraryError(f"页面来源只能是 {', '.join(PAGE_SOURCES)}")
         self.conn.execute("DELETE FROM lecture_page WHERE lecture_id = ?", (lecture_id,))
         self.conn.executemany(
-            "INSERT OR IGNORE INTO lecture_page (lecture_id, material_id, page_no, source) VALUES (?, ?, ?, ?)",
-            [(lecture_id, ref.material_id, ref.page_no, source) for ref in refs],
+            "INSERT OR IGNORE INTO lecture_page (lecture_id, material_id, page_no, source)"
+            " SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM material WHERE id = ?)",
+            [(lecture_id, ref.material_id, ref.page_no, source, ref.material_id) for ref in refs],
         )
         self.conn.commit()
 

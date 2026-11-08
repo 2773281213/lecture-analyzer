@@ -68,20 +68,24 @@ def _run(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[str
 
     考试方案还没确认时停在整理笔记之前：任务照常结束（不算失败），结果转到课程页的考试方案。"""
     from .pipeline.exam_plan import AwaitingExamPlan
-    from .pipeline.run import STEPS, RunOptions, process_lectures
+    from .pipeline.run import STEPS, RunOptions, existing_lectures, process_lectures
 
     course = _course(library, job)
     params = job.params
     ids = [int(i) for i in params.get("lectures") or []]
+    lectures = existing_lectures(library, ids)  # 排队期间可能已被删除
+    if ids and not lectures:
+        return {"url": _course_url(course), "summary": "要处理的讲已被删除"}
     force = set(params.get("force") or [])
     options = RunOptions(force=frozenset(STEPS if "all" in force else force & set(STEPS)),
                          model=params.get("model") or None, asr=params.get("asr") or None)
     progress = _LectureReport(report)
     try:
-        processed = process_lectures(cfg, library, course, [library.lecture_by_id(i) for i in ids] or None, options,
-                                     progress, progress.announce)
+        processed = process_lectures(cfg, library, course, lectures or None, options, progress, progress.announce)
     except AwaitingExamPlan as exc:
         return {"url": _course_url(course, "#exam-plan"), "summary": str(exc), "awaiting_exam_plan": True}
+    if not processed and ids and not existing_lectures(library, ids):  # 等这些讲的锁期间被删除了
+        return {"url": _course_url(course), "summary": "要处理的讲已被删除"}
     url = f"/lectures/{ids[0]}" if len(ids) == 1 else _course_url(course)
     return {"url": url, "summary": f"处理了 {processed} 讲" if processed else "所有讲都已处理完成"}
 
@@ -141,7 +145,10 @@ def _process_material(cfg: AppConfig, library: Library, job: Job, report: Report
     course = _course(library, job)
     store = MaterialStore(library)
     ids = [int(i) for i in job.params.get("materials") or []]
-    process_materials(cfg, library, course, [store.get(i) for i in ids] or None, report=report)
+    materials = store.existing(ids)  # 排队期间可能已被删除
+    if ids and not materials:
+        return {"url": _course_url(course, "#materials"), "summary": "要处理的资料已被删除"}
+    process_materials(cfg, library, course, materials or None, report=report)
     return {"url": f"/materials/{ids[0]}" if len(ids) == 1 else _course_url(course, "#materials")}
 
 
@@ -172,6 +179,7 @@ def _report(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[
 
 def _review(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[str, Any]:
     from .books import export_course
+    from .locks import hold, memory_lock
     from .pipeline.materials import ensure_mapped
     from .pipeline.review import generate_review, plan_review, review_context
 
@@ -184,7 +192,8 @@ def _review(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[
     if needed:
         report(f"将生成 {len(needed)} 章（共 {len(planned)} 章）")
         generate_review(review_context(cfg, library, report), course, planned)
-    export_course(library, cfg.data_dir, course)
+    with hold(memory_lock(cfg.data_dir, course.id), on_wait=lambda: report("等这门课的其他操作结束后导出…")):
+        export_course(library, cfg.data_dir, course)
     return {"url": f"/courses/{course.id}/review", "chapters": len(needed)}
 
 

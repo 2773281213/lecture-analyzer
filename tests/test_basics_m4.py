@@ -34,7 +34,7 @@ def test_delete_lecture_restores_memory_and_files(m1_env):
         second = library.add_lecture(course, 4, [m1_env.media])
         library.set_step(second.id, "validate", "done")
         library.set_step(second.id, "integrate", "done")
-        stale = delete_lecture(library, m1_env.cfg.data_dir, library.lecture_by_id(m1_env.lecture_id))
+        stale = delete_lecture(library, m1_env.cfg.data_dir, library.lecture_by_id(m1_env.lecture_id)).stale
         assert [lecture.seq for lecture in stale] == [4]  # 后面整合过的讲标记为待更新
         assert CourseMemory(library).tree(course) == []  # 课程记忆回到第 3 讲之前（空）
         assert [lecture.seq for lecture in library.lectures(course)] == [4]

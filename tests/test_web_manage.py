@@ -7,9 +7,11 @@ from fastapi.testclient import TestClient
 from lecture_analyzer.course import CourseSettings
 from lecture_analyzer.jobs import JobStore
 from lecture_analyzer.library import Library
+from lecture_analyzer.locks import lecture_lock, material_lock
 from lecture_analyzer.materials import MaterialStore
 from lecture_analyzer.web import create_app, views
 
+from .test_locks import held_elsewhere
 from .test_materials import _pdf
 from .test_pipeline_run import _run
 from .test_web import BASE, _post
@@ -196,26 +198,67 @@ def test_run_buttons_and_lecture_management(m1_env, tmp_path):
     assert client.get(f"/lectures/{lecture_id}").status_code == 404
 
 
-def test_delete_material_and_busy_course(m1_env, tmp_path):
+def test_manage_lecture_while_jobs_run(m1_env, tmp_path):
+    """别的讲在后台处理时，这一讲照常能追加节、删除；这一讲自己正在处理时页面说明原因，提交也被拒绝。"""
+    client = _client(m1_env)
+    lecture_id = m1_env.lecture_id
+    extra = tmp_path / "补录.wav"
+    extra.write_bytes(b"fake")
+    with Library(_db(m1_env)) as library:
+        course = library.course_by_id(m1_env.course_id)
+        fourth = library.add_lecture(course, 4, [m1_env.media])
+        store = JobStore(library)
+        other = store.add(course, "run", {"lectures": [fourth.id], "force": []})
+        store.start(other.id)  # 第 4 讲正在后台处理
+        only = store.add(course, "run", {"lectures": [lecture_id], "force": []})
+    with held_elsewhere(lecture_lock(m1_env.cfg.data_dir, fourth.id)):
+        page = client.get(f"/lectures/{lecture_id}").text
+        assert "正在后台处理" not in page and '<button class="button button-danger">删除第 3 讲' in page
+        assert _post(client, f"/lectures/{lecture_id}/parts", paths=str(extra)).status_code == 303
+        busy = client.get(f"/lectures/{fourth.id}").text
+        assert "这一讲正在后台处理" in busy and '<button class="button button-danger" disabled>删除第 4 讲' in busy
+        refused = _post(client, f"/lectures/{fourth.id}/parts", paths=str(extra))
+        assert refused.status_code == 400 and "第 4 讲正在后台处理" in refused.text
+        refused = _post(client, f"/lectures/{fourth.id}/delete", confirm="1")
+        assert refused.status_code == 400 and "第 4 讲正在后台处理" in refused.text
+        deleted = _post(client, f"/lectures/{lecture_id}/delete", confirm="1")
+        assert deleted.status_code == 303
+        flashed = client.get(deleted.headers["location"]).text
+        assert "已删除第 3 讲" in flashed and f"只处理这一讲的后台任务已取消：#{only.id}" in flashed
+    with Library(_db(m1_env)) as library:
+        assert JobStore(library).get(other.id).state == "running" and len(library.lecture_by_id(fourth.id).parts) == 1
+
+
+def test_delete_material_while_other_jobs_run(m1_env, tmp_path):
+    """这门课有别的任务没结束时也能删除资料；点名用到这份资料的任务没结束时不行。"""
     client = _client(m1_env)
     pdf = _pdf(tmp_path / "模拟题.pdf", 1)
     imported = _post(client, f"/courses/{m1_env.course_id}/materials", paths=str(pdf), kind="mock_exam", title="期中模拟")
     job = _jobs(m1_env)[-1]
     assert imported.headers["location"] == f"/jobs/{job.id}" and job.state == "done", job.error
     with Library(_db(m1_env)) as library:
-        material = MaterialStore(library).list(library.course_by_id(m1_env.course_id))[0]
+        course = library.course_by_id(m1_env.course_id)
+        material = MaterialStore(library).list(course)[0]
         assert material.title == "期中模拟" and material.step_state("digest") == ""  # 没勾选立即识别
-        busy = JobStore(library).add(library.course_by_id(m1_env.course_id), "rebuild", {})
+        store = JobStore(library)
+        busy = store.add(course, "rebuild", {})  # 与这份资料无关
+        store.pause(store.add(course, "run", {"lectures": [m1_env.lecture_id], "force": []}).id)
+        report = store.add(course, "report", {"lectures": [], "materials": [material.id], "models": []})
     course_page = client.get(f"/courses/{m1_env.course_id}").text
     assert "继续处理没处理完的资料" in course_page and f'data-job-id="{busy.id}"' in course_page
+    detail = client.get(f"/materials/{material.id}").text
+    assert f'action="/materials/{material.id}/delete"' not in detail and f"#{report.id} 生成考前报告" in detail
     refused = _post(client, f"/materials/{material.id}/delete")
-    assert refused.status_code == 400 and "还有没结束的后台任务" in refused.text
+    assert refused.status_code == 400 and "正被后台任务用到" in refused.text and f"#{report.id}" in refused.text
     with Library(_db(m1_env)) as library:
-        JobStore(library).cancel(busy.id)
+        JobStore(library).cancel(report.id)
+    assert f'action="/materials/{material.id}/delete"' in client.get(f"/materials/{material.id}").text
     removed = _post(client, f"/materials/{material.id}/delete")
     assert removed.headers["location"] == f"/courses/{m1_env.course_id}#materials"
     assert "已删除资料「期中模拟」" in client.get(removed.headers["location"]).text
     assert pdf.is_file()  # 原文件不受影响
+    with Library(_db(m1_env)) as library:
+        assert JobStore(library).get(busy.id).state == "queued"  # 别的任务不受影响
 
 
 def test_delete_several_materials_from_course_page(m1_env):
@@ -238,13 +281,14 @@ def test_delete_several_materials_from_course_page(m1_env):
     with Library(_db(m1_env)) as library:
         course = library.course_by_id(m1_env.course_id)
         assert [m.id for m in MaterialStore(library).list(course)] == [materials[2].id]
-        JobStore(library).pause(JobStore(library).add(course, "rebuild", {}).id)  # 暂停的任务也算没结束
-    page = client.get(f"/courses/{m1_env.course_id}").text
-    assert f'action="{url}"' not in page and "还有 1 个没结束的后台任务" in page  # 不给删除入口，说明原因
-    detail = client.get(f"/materials/{materials[2].id}").text
-    assert f'action="/materials/{materials[2].id}/delete"' not in detail and "1 个没结束的后台任务" in detail
-    refused = _post(client, url, material=[str(materials[2].id)])
-    assert refused.status_code == 400 and "还有没结束的后台任务" in refused.text
+        JobStore(library).pause(JobStore(library).add(course, "rebuild", {}).id)  # 与资料无关的任务不挡住删除
+    assert f'action="{url}"' in client.get(f"/courses/{m1_env.course_id}").text
+    with held_elsewhere(material_lock(m1_env.cfg.data_dir, materials[2].id)):  # 后台正在识别这一份
+        detail = client.get(f"/materials/{materials[2].id}").text
+        assert f'action="/materials/{materials[2].id}/delete"' not in detail and "正在后台处理" in detail
+        refused = _post(client, url, material=[str(materials[2].id)])
+        assert refused.status_code == 400 and "正在后台处理" in refused.text
+    assert _post(client, url, material=[str(materials[2].id)]).status_code == 303
 
 
 def test_same_source_materials_are_marked(m1_env):

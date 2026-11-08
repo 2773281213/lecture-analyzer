@@ -1,22 +1,29 @@
 """整理书架：把放错课程的一讲移到正确的课程，删除讲或整门课（命令行和网页共用）。
 
 删除只删书库里的数据、导出文件、中间文件和资料副本，原始音视频不动。
-课程还有没结束的后台任务时不能移动或删除（任务进程正在读写这些数据）。
+后台任务在处理这门课的其他讲时，也可以删除或移动一讲：只有正在处理这一讲、点名用到这一讲的任务，
+以及正在整合课程记忆或导出整门课的那几分钟会挡住（见 locks.py、jobs.lecture_blockers）；
+删除整门课仍要等这门课的任务都结束。
 """
 
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..books import course_dir, export_course, lecture_dir, work_dir
 from ..exam_plans import ExamPlanStore, plan_block
-from ..jobs import ensure_idle
+from ..jobs import (
+    Job, cancel_orphans, ensure_idle, ensure_unblocked, lecture_blockers, material_blockers, reading_jobs,
+)
 from ..knowledge import CourseMemory
 from ..library import Course, Lecture, Library, LibraryError
-from ..materials import MaterialStore
-from .ingest import material_dir
+from ..locks import UI_WAIT, discard, hold, lecture_lock, material_lock, materials_lock, memory_lock
+from ..materials import Material, MaterialStore
+from .ingest import material_dir, remove_material
 from .integrate import restore_prefix
 
 
@@ -25,6 +32,27 @@ class MoveResult:
     lecture: Lecture
     rerun_from: str  # 下次运行时从哪一步起重跑
     stale: list[Lecture]  # 两门课里因此标记为待更新的讲
+
+
+@dataclass
+class DeleteResult:
+    stale: list[Lecture]  # 因此标记为课程记忆待更新的讲
+    cancelled: list[Job]  # 只处理这一讲、还没开始或已暂停的任务，已随之取消
+
+
+@contextmanager
+def lecture_free(library: Library, data_dir: Path, lecture: Lecture, action: str) -> Iterator[None]:
+    """拿着这一讲的讲锁执行：此刻没有任务在处理这一讲，也没有别的任务点名用到它；否则说明原因。"""
+    busy = f"第 {lecture.seq} 讲正在后台处理，请等这一讲处理完，或在「后台任务」里暂停或取消后再{action}"
+    with hold(lecture_lock(data_dir, lecture.id), wait=0, busy=busy):
+        ensure_unblocked(lecture_blockers(library, lecture), f"第 {lecture.seq} 讲", action)
+        yield
+
+
+def memory_free(data_dir: Path, course: Course, action: str) -> AbstractContextManager[None]:
+    """拿着这门课的课程记忆锁执行：后台任务正在整合课程记忆或导出整门课时，等几秒还不行就说明原因。"""
+    return hold(memory_lock(data_dir, course.id), wait=UI_WAIT,
+                busy=f"「{course.name}」正在后台整合课程记忆或导出，请过一会儿再{action}")
 
 
 def rerun_step_for_move(source: Course, target: Course) -> str:
@@ -66,8 +94,14 @@ def move_lecture(
     source = library.course_by_id(lecture.course_id)
     if source.id == target.id:
         raise LibraryError(f"第 {lecture.seq} 讲已经在「{target.name}」里了")
-    ensure_idle(library, source, "移动讲")
-    ensure_idle(library, target, "移动讲")
+    with (lecture_free(library, data_dir, lecture, "移动"), memory_free(data_dir, source, "移动讲"),
+          memory_free(data_dir, target, "移动讲")):
+        ensure_unblocked(reading_jobs(library, target), f"「{target.name}」", "把讲移进来")
+        return _move(library, data_dir, lecture, source, target, seq)
+
+
+def _move(library: Library, data_dir: Path, lecture: Lecture, source: Course, target: Course,
+          seq: int | None) -> MoveResult:
     if seq is None:
         taken = {other.seq for other in library.lectures(target)}
         seq = lecture.seq if lecture.seq not in taken else next_free_seq(library, target)
@@ -90,19 +124,51 @@ def move_lecture(
     return MoveResult(moved, rerun_from, stale)
 
 
-def delete_lecture(library: Library, data_dir: Path, lecture: Lecture) -> list[Lecture]:
-    """删除一讲；课程记忆回到这一讲之前的一致状态，其后整合过的讲标记为待更新并返回。"""
+def delete_lecture(library: Library, data_dir: Path, lecture: Lecture) -> DeleteResult:
+    """删除一讲；课程记忆回到这一讲之前的一致状态，其后整合过的讲标记为待更新。
+    只处理这一讲、还没开始或已暂停的任务随之取消；处理多讲的任务到这一讲时跳过。"""
     course = library.course_by_id(lecture.course_id)
-    ensure_idle(library, course, "删除讲")
-    folder = lecture_dir(data_dir, course, lecture)
-    memory = CourseMemory(library)
-    memory.drop_lecture(lecture.id)
-    library.delete_lecture(lecture.id)
-    stale = restore_prefix(library, memory, course, lecture.seq)
-    shutil.rmtree(folder, ignore_errors=True)
-    shutil.rmtree(work_dir(data_dir, lecture.id), ignore_errors=True)
-    export_course(library, data_dir, course)
-    return stale
+    with lecture_free(library, data_dir, lecture, "删除"), memory_free(data_dir, course, "删除讲"):
+        cancelled = cancel_orphans(library, course, "run", "lectures", lecture.id)
+        folder = lecture_dir(data_dir, course, lecture)
+        memory = CourseMemory(library)
+        memory.drop_lecture(lecture.id)
+        library.delete_lecture(lecture.id)
+        stale = restore_prefix(library, memory, course, lecture.seq)
+        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(work_dir(data_dir, lecture.id), ignore_errors=True)
+        export_course(library, data_dir, course)
+    discard(lecture_lock(data_dir, lecture.id))
+    return DeleteResult(stale, cancelled)
+
+
+@dataclass
+class MaterialsDeleted:
+    affected: set[int]  # 用到这些资料的讲（编号）：下次处理时重新匹配课件
+    cancelled: list[Job]  # 只处理其中一份、还没开始或已暂停的任务，已随之取消
+
+
+def delete_materials(library: Library, data_dir: Path, course: Course, materials: list[Material]) -> MaterialsDeleted:
+    """删除这门课的几份资料（书库里的副本、识别结果和题目；原文件不受影响）。
+    后台任务在处理别的讲和资料时也可以删除；其中某份正在识别、拆题或对应知识点，这门课正在导入资料，
+    或有任务点名用到它们时不行。"""
+    with ExitStack() as stack:
+        for material in materials:
+            busy = (f"「{material.title}」正在后台处理（识别、拆题或对应知识点），请等它处理完，"
+                    "或在「后台任务」里暂停或取消后再删除")
+            stack.enter_context(hold(material_lock(data_dir, material.id), wait=0, busy=busy))
+            ensure_unblocked(material_blockers(library, course, material.id), f"「{material.title}」", "删除")
+        stack.enter_context(hold(materials_lock(data_dir, course.id), wait=UI_WAIT,
+                                 busy=f"「{course.name}」正在后台导入资料，请等导入完再删除资料"))
+        store = MaterialStore(library)
+        result = MaterialsDeleted(set(), [])
+        for material in materials:
+            result.cancelled += cancel_orphans(library, course, "process_material", "materials", material.id)
+            result.affected.update(store.lectures_using(material.id))
+            remove_material(library, data_dir, material.id)
+    for material in materials:
+        discard(material_lock(data_dir, material.id))
+    return result
 
 
 def delete_course(library: Library, data_dir: Path, course: Course) -> None:
