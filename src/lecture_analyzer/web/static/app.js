@@ -585,3 +585,216 @@
     }
   });
 })();
+
+// 问答页的附件：拖入微信、资源管理器里的文件，先上传到本机书架，提问时只提交附件编号。
+(function () {
+  "use strict";
+  const form = document.querySelector("[data-qa-ask]");
+  if (!form) return;
+  const field = form.querySelector("[data-attach-field]");
+  const drop = form.querySelector("[data-attach-drop]");
+  const input = form.querySelector("[data-attach-input]");
+  const list = form.querySelector("[data-attach-list]");
+  const status = form.querySelector("[data-attach-status]");
+  const submit = form.querySelector("[data-ask-submit]");
+  const csrf = form.querySelector('input[name="csrf"]').value;
+  const uploadUrl = form.dataset.uploadUrl;
+  const maxFiles = Number(form.dataset.maxFiles || "6");
+  const maxBytes = Number(form.dataset.maxBytes || "0");
+  const allowed = [".pdf", ".doc", ".docx", ".ppt", ".pptx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".bmp"];
+  let pending = 0;
+  let added = 0;
+  let dragDepth = 0;
+  const seen = new Set();
+
+  function setStatus(text, error) {
+    status.textContent = text || "";
+    status.classList.toggle("is-error", Boolean(error));
+  }
+
+  function suffixOf(name) {
+    const dot = name.lastIndexOf(".");
+    return dot < 0 ? "" : name.slice(dot).toLowerCase();
+  }
+
+  function isFileDrag(event) {
+    return Boolean(event.dataTransfer) && Array.from(event.dataTransfer.types || []).indexOf("Files") >= 0;
+  }
+
+  function makeRow(file) {
+    const row = document.createElement("li");
+    row.className = "attach-item is-uploading";
+    const icon = document.createElement("span");
+    icon.className = "attach-icon";
+    icon.innerHTML = '<svg class="i" aria-hidden="true"><use href="#i-file"/></svg>';
+    const body = document.createElement("span");
+    body.className = "attach-body";
+    const name = document.createElement("span");
+    name.className = "attach-name";
+    name.textContent = file.name;
+    const meta = document.createElement("span");
+    meta.className = "attach-meta";
+    meta.textContent = "上传中…";
+    body.append(name, meta);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attach-remove";
+    remove.setAttribute("aria-label", "移除附件");
+    remove.textContent = "×";
+    remove.disabled = true;
+    remove.addEventListener("click", function () { removeRow(row); });
+    row.append(icon, body, remove);
+    list.append(row);
+    list.hidden = false;
+    return { row, meta, remove };
+  }
+
+  function removeRow(row) {
+    const id = row.dataset.id;
+    if (id) {
+      const hidden = Array.from(form.querySelectorAll('input[name="attachment"]'))
+        .find(function (item) { return item.value === id; });
+      if (hidden) hidden.remove();
+      fetch(uploadUrl + "/" + encodeURIComponent(id), { method: "DELETE", headers: { "X-CSRF": csrf } })
+        .catch(function () { /* 没删掉也会在两天后自动清理 */ });
+      if (row.dataset.key) seen.delete(row.dataset.key);
+      added = Math.max(0, added - 1);
+    }
+    row.remove();
+    if (!list.children.length) list.hidden = true;
+    if (!pending) {
+      submit.disabled = false;
+      setStatus(added ? "已添加 " + added + " 个附件" : "", false);
+    }
+  }
+
+  async function upload(file) {
+    const key = file.name + "\u0000" + file.size;
+    if (seen.has(key)) {
+      setStatus("已经添加过「" + file.name + "」", false);
+      return;
+    }
+    if (allowed.indexOf(suffixOf(file.name)) < 0) {
+      setStatus("不支持「" + file.name + "」这种格式，请先另存为 PDF 或图片", true);
+      return;
+    }
+    if (maxBytes && file.size > maxBytes) {
+      setStatus("「" + file.name + "」太大，单个附件不能超过 " + form.dataset.maxSize, true);
+      return;
+    }
+    if (added >= maxFiles) {
+      setStatus("一次最多添加 " + maxFiles + " 个附件", true);
+      return;
+    }
+    seen.add(key);
+    added += 1;
+    pending += 1;
+    submit.disabled = true;
+    const view = makeRow(file);
+    view.row.dataset.key = key;
+    try {
+      const response = await fetch(uploadUrl + "?name=" + encodeURIComponent(file.name), {
+        method: "POST",
+        headers: { "X-CSRF": csrf, "Content-Type": "application/octet-stream" },
+        body: file
+      });
+      let data = null;
+      try { data = await response.json(); } catch (error) { data = null; }
+      if (!response.ok || !data || !data.attachment) {
+        throw new Error((data && data.error) || "上传失败（" + response.status + "）");
+      }
+      const attachment = data.attachment;
+      view.row.dataset.id = attachment.id;
+      view.row.classList.remove("is-uploading", "is-failed");
+      view.row.classList.toggle("is-image", Boolean(attachment.is_image));
+      view.meta.textContent = attachment.size_text;
+      view.remove.disabled = false;
+      const hidden = document.createElement("input");
+      hidden.type = "hidden";
+      hidden.name = "attachment";
+      hidden.value = attachment.id;
+      form.append(hidden);
+      setStatus("已添加 " + added + " 个附件", false);
+    } catch (error) {
+      view.row.classList.remove("is-uploading");
+      view.row.classList.add("is-failed");
+      view.meta.textContent = error.message || "上传失败";
+      view.remove.disabled = false;
+      seen.delete(key);
+      added = Math.max(0, added - 1);
+      setStatus(error.message || "附件上传失败", true);
+    } finally {
+      pending -= 1;
+      if (!pending) submit.disabled = false;
+    }
+  }
+
+  async function addFiles(files) {
+    const selected = Array.from(files || []);
+    if (!selected.length) return;
+    for (const file of selected) {
+      await upload(file);
+    }
+  }
+
+  drop.setAttribute("role", "button");
+  drop.setAttribute("tabindex", "0");
+  drop.addEventListener("click", function (event) {
+    const button = event.target.closest("button");
+    if (!button || button.closest("[data-attach-pick]")) input.click();
+  });
+  drop.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      input.click();
+    }
+  });
+  input.addEventListener("change", function () {
+    addFiles(input.files);
+    input.value = "";
+  });
+
+  // 整个问答页都接收文件拖放：从微信、QQ、资源管理器直接拖进来，不用先点选位置。
+  document.addEventListener("dragenter", function (event) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    dragDepth += 1;
+    form.classList.add("is-file-dragover");
+  });
+  document.addEventListener("dragover", function (event) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+  document.addEventListener("dragleave", function (event) {
+    if (!isFileDrag(event)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) form.classList.remove("is-file-dragover");
+  });
+  document.addEventListener("drop", function (event) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    dragDepth = 0;
+    form.classList.remove("is-file-dragover");
+    addFiles(event.dataTransfer.files);
+  });
+  document.addEventListener("dragend", function () {
+    dragDepth = 0;
+    form.classList.remove("is-file-dragover");
+  });
+
+  // 截图后直接 Ctrl+V 也可以添加到问题。
+  document.addEventListener("paste", function (event) {
+    if (!form.contains(event.target) || !event.clipboardData || !event.clipboardData.files.length) return;
+    event.preventDefault();
+    addFiles(event.clipboardData.files);
+  });
+
+  // 还在上传时不要提交，否则会少掉刚选的文件。捕获阶段先于公共的提交处理。
+  document.addEventListener("submit", function (event) {
+    if (event.target !== form || !pending) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setStatus("附件还在上传，稍等一下再提问", true);
+  }, true);
+})();

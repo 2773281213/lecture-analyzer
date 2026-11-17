@@ -3,6 +3,23 @@
 {% from "_evidence.html" import evidence_item %}
 {% from "_nav.html" import course_side %}
 {% set nav = "qa" %}
+{% macro saved_files(files, course_id) -%}
+{% if files %}
+<ul class="qa-files" aria-label="附件">
+  {% for f in files %}
+  <li class="qa-file">
+    <a class="qa-file-thumb" href="/courses/{{ course_id }}/qa/attachments/{{ f.id }}" target="_blank" rel="noopener" title="打开附件">
+      {% if f.is_image %}<img src="/courses/{{ course_id }}/qa/attachments/{{ f.id }}" alt="" loading="lazy">{% else %}<svg class="i"><use href="#i-file"/></svg>{% endif %}
+    </a>
+    <span class="qa-file-body">
+      <a class="qa-file-name" href="/courses/{{ course_id }}/qa/attachments/{{ f.id }}" target="_blank" rel="noopener">{{ f.name }}</a>
+      <span class="qa-file-meta">{{ f.size_text }}{% if f.pages and f.pages > 1 %} · {{ f.pages }} 页{% endif %}</span>
+    </span>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{%- endmacro %}
 {% block title %}提问 · {{ course.name }} · 课程书架{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -44,7 +61,8 @@
         <span class="role">问</span>{{ turn.question }}
         {% if r.scope %}<a class="chip" href="/lectures/{{ r.scope.lecture_id }}">限第 {{ r.scope.seq }} 讲</a>{% endif %}
       </p>
-      {% if not r.found %}<p><span class="chip state-stale">课程内容里没有找到答案</span></p>{% endif %}
+      {{ saved_files(r.get("attachments", []), course.id) }}
+      {% if not r.found %}<p><span class="chip state-stale">{{ "课程内容和附件里都没有找到答案" if r.get("attachments") else "课程内容里没有找到答案" }}</span></p>{% endif %}
       <div class="prose">{{ r.answer_md | md | cite(r.evidence) }}</div>
       {% if r.supplement_md %}
       <div class="supplement">
@@ -69,6 +87,7 @@
     {% for job in pending %}
     <article class="card qa-turn is-pending"{% if not job.paused %} data-job-id="{{ job.id }}" data-reload{% endif %}>
       <p class="qa-question"><span class="role">问</span>{{ job.params.question }}</p>
+      {{ saved_files(job.params.get("attachments", []), course.id) }}
       <p class="muted small"><span class="chip state-running" data-job-state>{{ JOB_STATES.get(job.state, job.state) }}</span> <span data-job-progress>{{ job.progress }}</span></p>
       {% if job.paused %}
       <form method="post" action="/jobs/{{ job.id }}/resume" class="form-actions">
@@ -82,12 +101,14 @@
     {% for job in failed %}
     <article class="card qa-turn is-failed">
       <p class="qa-question"><span class="role">问</span>{{ job.params.question }}</p>
+      {{ saved_files(job.params.get("attachments", []), course.id) }}
       <p class="muted small"><span class="chip state-failed">没有答成（{{ JOB_STATES.get(job.state, job.state) }}）</span> {{ job.error | truncate(300, true) }}</p>
       <form method="post" action="/courses/{{ course.id }}/qa" class="form-actions">
         {{ csrf_field() }}
         <input type="hidden" name="thread" value="{{ thread }}">
         <input type="hidden" name="question" value="{{ job.params.question }}">
         <input type="hidden" name="lecture" value="{{ job.params.lecture_id or '' }}">
+        {% for f in job.params.get("attachments", []) %}<input type="hidden" name="attachment" value="{{ f.id }}">{% endfor %}
         <button class="button button-quiet">重新提问</button>
         <a class="muted small" href="/jobs/{{ job.id }}">任务详情</a>
       </form>
@@ -95,12 +116,30 @@
     {% endfor %}
 
     {% if has_memory %}
-    <form method="post" action="/courses/{{ course.id }}/qa" class="form-card qa-ask">
+    <form method="post" action="/courses/{{ course.id }}/qa" class="form-card qa-ask" data-qa-ask
+          data-upload-url="/courses/{{ course.id }}/qa/attachments" data-max-files="{{ max_files }}"
+          data-max-bytes="{{ max_file_bytes }}" data-max-size="{{ max_file_size }}">
       {{ csrf_field() }}
       {% if thread %}<input type="hidden" name="thread" value="{{ thread }}">{% endif %}
       <label class="field"><span class="field-label">{{ "接着问" if turns or pending or failed else "你的问题" }}</span>
         <textarea name="question" rows="3" maxlength="{{ max_chars }}" required
                   placeholder="用什么语言提问都可以，例如：朊病毒和普通病毒有什么不同？"></textarea></label>
+
+      <div class="attach-field" data-attach-field>
+        <div class="attach-head">
+          <span class="field-label">附件（可选）</span>
+          <span class="muted small">图片、PDF、Word、PPT、TXT，单个不超过 {{ max_file_size }}，最多 {{ max_files }} 个 · 只用于这一次提问</span>
+        </div>
+        <div class="attach-drop" data-attach-drop>
+          <svg class="i" aria-hidden="true"><use href="#i-file"/></svg>
+          <span>把文件拖到这里，或 <button type="button" class="link-button" data-attach-pick>选择文件</button></span>
+        </div>
+        <input type="file" multiple hidden data-attach-input
+               accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.png,.jpg,.jpeg,.bmp">
+        <ul class="attach-list" data-attach-list hidden></ul>
+        <p class="attach-status muted small" data-attach-status role="status"></p>
+      </div>
+
       <div class="form-actions">
         <label class="check-label">范围
           <select name="lecture">
@@ -108,7 +147,7 @@
             {% for l in lectures %}<option value="{{ l.id }}"{{ " selected" if l.id == scope }}{{ " disabled" if l.id not in ready }}>第 {{ l.seq }} 讲{% if l.title %}「{{ l.title | truncate(20, true) }}」{% endif %}{% if l.id not in ready %}（还没处理）{% endif %}</option>{% endfor %}
           </select>
         </label>
-        <button class="button">提问</button>
+        <button class="button" data-ask-submit>提问</button>
         <span class="muted small">在后台回答，一般要半分钟左右，可以离开本页</span>
       </div>
     </form>

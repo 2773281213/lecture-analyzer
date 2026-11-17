@@ -45,7 +45,7 @@ REPORT_VERSION = 2  # 1：M3 的旧版报告（排名、理由、证据、叙述
 PLAN_REPORT_VERSION = 3  # 有考试方案时：在 2 的基础上按题型分组，附题型分值表和答题要求
 MAX_TOP_N = 40  # 按题数放大后的排名个数上限
 OTHER_GROUP = "其他考点"
-_EVIDENCE_ID = re.compile(r"^\s*([QMPENT])\s*(\d+)\s*$", re.I)  # 问答另有笔记要点 N、转写片段 T
+_EVIDENCE_ID = re.compile(r"^\s*([QMPENTF])\s*(\d+)\s*$", re.I)  # 问答另有笔记要点 N、转写片段 T、学生附件 F
 
 
 @dataclass

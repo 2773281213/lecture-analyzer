@@ -1,21 +1,51 @@
-"""问答页：一门课里的多段对话。可以新开对话、接着追问、限定某一讲；提问作为轻任务在后台回答
+"""问答页：一门课里的多段对话。可以新开对话、接着追问、限定某一讲、随问题添加附件；提问作为轻任务在后台回答
 （不会被正在跑的转写挡住），页面显示进度，答完自动刷新；没答成的问题留在对话里，显示原因，可以重新提问。
-回答里的出处编号渲染成链接（见 app.py 的 cite 过滤器）。"""
+回答里的出处编号渲染成链接（见 app.py 的 cite 过滤器）。附件先通过本页的小接口上传到书库，提问时只提交编号。"""
 
 from __future__ import annotations
 
+import secrets
+
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from ..conversations import QAStore
 from ..jobs import Job, JobStore
 from ..knowledge import CourseMemory
 from ..library import Course, Library
 from ..pipeline.qa import MAX_QUESTION_CHARS
+from ..qa_attachments import (
+    MAX_FILE_BYTES, MAX_FILES, AttachmentError, discard_attachment, discard_saved, get_attachment, human_size,
+    mark_used, resolve_attachments, save_attachment,
+)
 from .forms import LONG_FORM_BYTES, enqueue, int_field, library_of, read_form, redirect
 from .views import spine_color
 
 router = APIRouter()
+
+
+class _TooLarge(Exception):
+    pass
+
+
+def _csrf_ok(request: Request) -> bool:
+    supplied = request.headers.get("x-csrf", "")
+    return bool(supplied) and secrets.compare_digest(supplied, request.app.state.csrf_token)
+
+
+async def _body_limited(request: Request, limit: int) -> bytes:
+    """读请求体并限制大小；不信任 Content-Length，按实际收到的字节算。"""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise _TooLarge
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise _TooLarge
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _ready_lectures(library: Library, course: Course) -> set[int]:
@@ -29,6 +59,50 @@ def _thread_jobs(library: Library, course: Course, thread: int, answered_at: str
     pending = [job for job in jobs if not job.finished]
     failed = [job for job in jobs if job.state in ("failed", "cancelled") and job.updated_at > answered_at]
     return pending, failed
+
+
+@router.post("/courses/{course_id}/qa/attachments")
+async def upload_attachment(request: Request, course_id: int) -> Response:
+    """接收拖进来的一个文件。文件名放在查询参数里，正文是文件本身（不依赖 multipart 解析库）。"""
+    if not _csrf_ok(request):
+        return JSONResponse({"error": "页面令牌已失效，请刷新页面后重试"}, status_code=403)
+    with library_of(request) as library:
+        library.course_by_id(course_id)  # 课程不存在时返回 404
+    name = request.query_params.get("name", "")
+    try:
+        data = await _body_limited(request, MAX_FILE_BYTES)
+    except _TooLarge:
+        return JSONResponse({"error": f"附件超过 {MAX_FILE_BYTES // (1024 * 1024)} MB，请压缩或拆分后再上传"},
+                            status_code=413)
+    try:
+        attachment = save_attachment(request.app.state.cfg.data_dir, course_id, name, data)
+    except AttachmentError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"attachment": attachment.summary()})
+
+
+@router.get("/courses/{course_id}/qa/attachments/{token}")
+def download_attachment(request: Request, course_id: int, token: str) -> FileResponse:
+    """查看或下载提问里的附件；只按随机编号查找，不接受路径。"""
+    with library_of(request) as library:
+        library.course_by_id(course_id)
+    try:
+        attachment = get_attachment(request.app.state.cfg.data_dir, course_id, token)
+    except AttachmentError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return FileResponse(attachment.path, media_type=attachment.mime, filename=attachment.name,
+                        content_disposition_type="inline", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.delete("/courses/{course_id}/qa/attachments/{token}")
+async def remove_attachment(request: Request, course_id: int, token: str) -> Response:
+    """删除一个还没提交提问的上传；已提交的附件随对话保留。"""
+    if not _csrf_ok(request):
+        return JSONResponse({"error": "页面令牌已失效，请刷新页面后重试"}, status_code=403)
+    with library_of(request) as library:
+        library.course_by_id(course_id)
+    removed = discard_attachment(request.app.state.cfg.data_dir, course_id, token, only_unused=True)
+    return JSONResponse({"removed": removed})
 
 
 @router.get("/courses/{course_id}/qa", response_class=HTMLResponse)
@@ -47,6 +121,7 @@ def qa_page(request: Request, course_id: int, thread: int = 0, lecture: int = 0)
             "turns": turns, "pending": pending, "failed": failed, "lectures": library.lectures(course),
             "scope": scope if scope in ready else 0, "ready": ready,
             "has_memory": bool(ready), "max_chars": MAX_QUESTION_CHARS,
+            "max_files": MAX_FILES, "max_file_bytes": MAX_FILE_BYTES, "max_file_size": human_size(MAX_FILE_BYTES),
         }
     return request.app.state.templates.TemplateResponse(request, "qa.html", context)
 
@@ -66,8 +141,13 @@ async def ask(request: Request, course_id: int) -> RedirectResponse:
             raise HTTPException(400, "所选的讲不属于这门课")
         if lecture_id and lecture_id not in _ready_lectures(library, course):
             raise HTTPException(400, "这一讲还没有整合进课程记忆，先处理这一讲再提问")
+        attachments = resolve_attachments(request.app.state.cfg.data_dir, course.id, form.getlist("attachment"))
         thread = int_field(form, "thread", "对话编号", required=False) or _new_thread(library, course)
-        enqueue(request, library, course, "qa", {"thread": thread, "question": question, "lecture_id": lecture_id})
+        params = {"thread": thread, "question": question, "lecture_id": lecture_id,
+                  "attachments": [attachment.summary() for attachment in attachments]}
+        enqueue(request, library, course, "qa", params)
+        for attachment in attachments:
+            mark_used(request.app.state.cfg.data_dir, attachment)
     return redirect(f"/courses/{course_id}/qa?thread={thread}")
 
 
@@ -81,5 +161,10 @@ def _new_thread(library: Library, course: Course) -> int:
 async def delete_thread(request: Request, course_id: int, thread: int) -> RedirectResponse:
     await read_form(request)
     with library_of(request) as library:
-        QAStore(library).delete_thread(library.course_by_id(course_id), thread)
+        course = library.course_by_id(course_id)
+        store = QAStore(library)
+        turns = store.thread(course, thread)
+        store.delete_thread(course, thread)
+    for turn in turns:
+        discard_saved(request.app.state.cfg.data_dir, course_id, turn.result.get("attachments"))
     return redirect(f"/courses/{course_id}/qa")

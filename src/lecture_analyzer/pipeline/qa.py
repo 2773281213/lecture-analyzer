@@ -6,6 +6,8 @@
    （知识点开始讲的地方，带时间）。限定某一讲时只用这一讲的内容，不用资料题目。
 3. 回答（[steps] qa，默认 Claude）：用提问的语言回答，只写证据编号；代码去掉不存在的编号，
    结果里只保留回答引用的证据，网页按编号显示出处（原话跳到录音的时间点、课件页弹出页面图片）。
+4. 附件：学生随问题上传的图片、PDF、Word、PPT、文本，在代码里展开成 F 编号的文字和页面图片，
+   和课程证据一起交给模型；附件只是问题材料，不是老师讲的内容。
 """
 
 from __future__ import annotations
@@ -21,8 +23,9 @@ from ..conversations import QATurn
 from ..exam_plans import ExamPlanStore, plan_block
 from ..knowledge import CourseMemory, KnowledgePoint, LectureCache
 from ..library import Course, Lecture, Library, LibraryError
-from ..llm import TextPart, billed_profile, create_provider
+from ..llm import ImagePart, ModelProfile, Part, TextPart, billed_profile, create_provider
 from ..prompts import load_prompt
+from ..qa_attachments import AttachmentContent, StoredAttachment, read_attachments
 from ..schemas import QAAnswer, QARetrieval
 from ..textnorm import strip_foreign_asides
 from ..timecode import format_ms
@@ -54,6 +57,7 @@ class QAContext:
     question: str
     lecture: Lecture | None  # 限定某一讲；None 表示整门课
     history: Sequence[QATurn]  # 这段对话之前的几轮
+    attachments: Sequence[AttachmentContent] = ()  # 学生随问题上传的附件（已展开成文字和图片）
 
     @property
     def lectures(self) -> list[Lecture]:
@@ -62,7 +66,7 @@ class QAContext:
 
 def answer_question(
     cfg: AppConfig, library: Library, course: Course, question: str, lecture: Lecture | None = None,
-    history: Sequence[QATurn] = (), report: Report = print,
+    history: Sequence[QATurn] = (), report: Report = print, attachments: Sequence[StoredAttachment] = (),
 ) -> dict[str, Any]:
     """回答一个问题，返回要存进问答记录的结果（回答、补充、用到的知识点和证据、模型）。"""
     ctx = QAContext(cfg, library, course, _checked_question(question), lecture, history[-HISTORY_TURNS:])
@@ -72,6 +76,9 @@ def answer_question(
     if not tree:
         where = f"第 {lecture.seq} 讲" if lecture else f"「{course.name}」"
         raise LibraryError(f"{where}还没有整合进课程记忆的内容，先处理这一讲再提问")
+    if attachments:
+        ctx.attachments = read_attachments(attachments, cfg.data_dir / "qa_attachments" / "_work", report)
+        _require_attachment_vision(ctx.attachments, cfg.profile_for_step("qa"))
     keys, seqs, retrieve_model = _retrieve(ctx, tree, report)
     evidence, kps = _collect(ctx, keys, seqs)
     answer, answer_model, note = _answer(ctx, evidence, kps, seqs, report)
@@ -85,6 +92,8 @@ def answer_question(
         "lectures": seqs,
         "scope": {"lecture_id": lecture.id, "seq": lecture.seq} if lecture else None,
         "evidence": {eid: evidence.views[eid] for eid in cited},
+        "attachments": [{**content.attachment.summary(), "pages": content.page_count}
+                        for content in ctx.attachments],
         "models": {"retrieve": retrieve_model, "answer": answer_model},
         "note": note,
     }
@@ -130,13 +139,19 @@ def _retrieve(ctx: QAContext, tree: list[KnowledgePoint], report: Report) -> tup
     sections = [
         Section("提问范围", [Item(_scope_text(ctx))]),
         Section("最近几轮对话", _history_items(ctx.history, 200)),
+    ]
+    attachment_items = _attachment_items(ctx.attachments, full=False, vision=profile.vision)
+    if attachment_items:
+        sections.append(Section("学生上传的附件", attachment_items))
+    sections += [
         Section("课程知识点", [Item(_catalog_line(kp, hits.get(kp.key, []))) for kp in tree]),
         Section("各讲大纲", [Item(line) for line in _outlines(ctx, ctx.lectures)], trim_rank=1),
     ]
-    assembled = assemble(sections, input_budget(profile, QA_BUDGET), profile, fixed_chars=len(system) + len(ask))
+    assembled = assemble(sections, _attachment_budget(profile, ctx.attachments), profile,
+                         fixed_chars=len(system) + len(ask))
     report("正在查找和问题相关的知识点…")
     result = create_provider(profile).generate_structured(
-        [TextPart(assembled.text), TextPart(ask)], QARetrieval, system=system,
+        _request_parts(assembled.text, ask, ctx.attachments, profile.vision), QARetrieval, system=system,
         effort=ctx.cfg.effort_for_step("qa_retrieve"),
     )
     used = billed_profile(result, profile)  # 主模型拒答时由备用档案接手
@@ -241,6 +256,7 @@ def _collect(ctx: QAContext, keys: Sequence[int], seqs: Sequence[int]) -> tuple[
     items = [by_key[key] for key in keys if key in by_key]
     picked = Scoring([item for item in items if not item.excluded], [item for item in items if item.excluded])
     evidence = build_evidence(ctx.library, ctx.course, picked, scope)
+    _add_attachment_views(evidence, ctx)
     lecture_evidence = _LectureEvidence(evidence, LectureCache(ctx.library))
     for item in items:
         for appearance in item.kp.appearances[:MAX_APPEARANCES]:
@@ -266,20 +282,96 @@ def _answer(
     sections = [
         Section("提问范围", [Item(_scope_text(ctx))]),
         Section("之前的对话", _history_items(ctx.history, 600), trim_rank=2),
+    ]
+    attachment_items = _attachment_items(ctx.attachments, full=True, vision=profile.vision)
+    if attachment_items:
+        sections.append(Section("学生上传的附件", attachment_items))
+    sections += [
         Section("相关知识点", [Item(_kp_line(kp)) for kp in kps], empty_text="（没有找到相关的知识点）"),
         Section("各讲大纲", [Item(line) for line in _outlines(ctx, [x for x in ctx.lectures if x.seq in seqs])]),
         Section("笔记要点", evidence_items(evidence, "N", _note_text), trim_rank=3),
         Section("转写片段（老师讲课的原文）", evidence_items(evidence, "T", _excerpt_text), trim_rank=1),
         *evidence_sections(evidence),
     ]
-    assembled = assemble(sections, input_budget(profile, QA_BUDGET), profile, fixed_chars=len(system) + len(ask))
+    assembled = assemble(sections, _attachment_budget(profile, ctx.attachments), profile,
+                         fixed_chars=len(system) + len(ask))
     report(f"{profile.model} 正在回答…")
     result = create_provider(profile).generate_structured(
-        [TextPart(assembled.text), TextPart(ask)], QAAnswer, system=system, effort=ctx.cfg.effort_for_step("qa"),
+        _request_parts(assembled.text, ask, ctx.attachments, profile.vision), QAAnswer, system=system,
+        effort=ctx.cfg.effort_for_step("qa"),
     )
     used = billed_profile(result, profile)
     ctx.library.log_call(None, "qa", used, result.usage, course_id=ctx.course.id)
     return result.output, used.model, trimmed_note(assembled.trimmed)
+
+
+# ---------- 附件 ----------
+
+
+def _attachment_label(index: int, content: AttachmentContent) -> str:
+    item = content.attachment
+    pages = f"，{content.page_count} 页" if content.page_count > 1 else ""
+    return f"[F{index}] 附件「{item.name}」（{item.size_text}{pages}）"
+
+
+def _attachment_items(contents: Sequence[AttachmentContent], *, full: bool, vision: bool) -> list[Item]:
+    """附件给模型看的文字。附件是学生自己提供的，不随课程证据一起裁剪。"""
+    items: list[Item] = []
+    for index, content in enumerate(contents, start=1):
+        label = _attachment_label(index, content)
+        body = content.text or ("（图片附件，内容见随附页面图片）" if content.images else "（没有可读取的文字）")
+        if content.images and not content.has_text:
+            body = "（图片附件，内容见随附页面图片）" if vision else "（图片附件；当前模型不能读取图片内容）"
+        elif content.images:
+            body += (f"\n（另有 {len(content.images)} 页图片随附）" if vision
+                     else f"\n（另有 {len(content.images)} 页图片，当前模型不能读取）")
+        if content.truncated:
+            body += "\n（附件较长，这里只展开了前面一部分）"
+        text = f"{label}：\n{body}"
+        items.append(Item(text, f"{label}：{snippet(body, 1200 if not full else 600)}"))
+    return items
+
+
+def _attachment_budget(profile: ModelProfile, contents: Sequence[AttachmentContent]) -> int:
+    """图片也占上下文；按每页约 1200 token 预留，避免文字刚好塞满时超限。"""
+    images = sum(len(content.images) for content in contents)
+    return max(input_budget(profile, QA_BUDGET) - images * 1200, 5_000)
+
+
+def _request_parts(text: str, ask: str, contents: Sequence[AttachmentContent], vision: bool) -> list[Part]:
+    """文本在前，附件图片居中，问题在最后。"""
+    parts: list[Part] = [TextPart(text)]
+    if vision:
+        for index, content in enumerate(contents, start=1):
+            for page_no, data in content.images:
+                parts.append(TextPart(f"附件 F{index}「{content.attachment.name}」第 {page_no} 页的图片："))
+                parts.append(ImagePart(data, "image/png"))
+    parts.append(TextPart(ask))
+    return parts
+
+
+def _require_attachment_vision(contents: Sequence[AttachmentContent], profile: ModelProfile) -> None:
+    """图片/扫描件没有文字时，回答模型必须能看图，否则给出能照做的说明。"""
+    if profile.vision:
+        return
+    names = [content.attachment.name for content in contents if content.images and not content.has_text]
+    if names:
+        shown = "、".join(f"「{name}」" for name in names[:3])
+        raise LibraryError(
+            f"附件{shown}是图片或扫描件，但回答用的模型档案「{profile.name}」不支持图片输入。"
+            "请在设置里把问答步骤换成能看图的模型，或把图片里的文字直接发出来。"
+        )
+
+
+def _add_attachment_views(evidence: Evidence, ctx: QAContext) -> None:
+    """把 F1、F2… 作为证据编号，回答引用附件时网页上可以点开原文件。"""
+    for index, content in enumerate(ctx.attachments, start=1):
+        item = content.attachment
+        evidence.views[f"F{index}"] = {
+            "id": f"F{index}", "course_id": ctx.course.id, "token": item.id, "name": item.name,
+            "size": item.size, "size_text": item.size_text, "mime": item.mime,
+            "is_image": item.is_image, "pages": content.page_count,
+        }
 
 
 def _kp_line(kp: KnowledgePoint) -> str:

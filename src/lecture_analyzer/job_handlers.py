@@ -201,16 +201,20 @@ def _review(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[
 
 
 def _qa(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[str, Any]:
-    """回答一个问题并存进这段对话：thread 为对话编号，lecture_id 为限定的讲（空表示整门课）。"""
+    """回答一个问题并存进这段对话：thread 为对话编号，lecture_id 为限定的讲（空表示整门课），
+    attachments 为学生随问题上传的附件。"""
     from .conversations import QAStore
     from .pipeline.qa import answer_question
+    from .qa_attachments import load_job_attachments
 
     course = _course(library, job)
     params = job.params
     lecture = library.lecture_by_id(int(params["lecture_id"])) if params.get("lecture_id") else None
+    attachments = load_job_attachments(cfg.data_dir, course.id, params.get("attachments"))
     store = QAStore(library)
     thread = int(params["thread"])
-    result = answer_question(cfg, library, course, params["question"], lecture, store.thread(course, thread), report)
+    result = answer_question(cfg, library, course, params["question"], lecture, store.thread(course, thread), report,
+                             attachments=attachments)
     turn_id = store.add(course, lecture.id if lecture else None, thread, result["question"], result,
                         list(result["models"].values()))
     return {"url": f"/courses/{course.id}/qa?thread={thread}#qa-{turn_id}", "turn_id": turn_id}

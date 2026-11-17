@@ -24,6 +24,8 @@ def evidence_text(view: dict[str, Any]) -> str:
         return f"笔记「{view['name']}」（{_lecture(view)}）"
     if kind == "T":  # 转写是原文（可能是外语），提示里只写位置
         return f"转写片段（{_lecture(view)}）"
+    if kind == "F":  # 学生随问题上传的附件
+        return f"附件「{view['name']}」"
     return f"例题「{view['title']}」（{_lecture(view)}）"
 
 

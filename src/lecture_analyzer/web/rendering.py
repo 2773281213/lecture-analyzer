@@ -17,7 +17,7 @@ _PLACEHOLDER = re.compile(_OPEN + r"(\d+)" + _CLOSE)
 # CommonMark 规定 `)**` 后紧跟文字时不算加粗结束，中文、韩文里很常见（如 **장(소장·대장)**인），渲染后补上
 _LEFTOVER_BOLD = re.compile(r"\*\*([^*<>\n]+?)\*\*")
 _TAG = re.compile(r"(<[^>]*>)")
-_CITATION = re.compile(r"\[([QMPENT]\d+)\]")
+_CITATION = re.compile(r"\[([QMPENTF]\d+)\]")
 
 
 def render_markdown(text: str | None) -> Markup:
@@ -45,6 +45,8 @@ def evidence_url(view: dict[str, Any]) -> str:
         return f"/materials/{view['material_id']}/pages/{view['page_no']}.png"
     if kind == "M":
         return f"/materials/{view['material_id']}"
+    if kind == "F":
+        return f"/courses/{view['course_id']}/qa/attachments/{view['token']}"
     time = f"?t={view['t']}" if view.get("t") is not None else ""
     return f"/lectures/{view['lecture_id']}{time}"
 
