@@ -45,7 +45,7 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp"}
 TEXT_SUFFIXES = {".txt", ".md"}
 
 MAX_PAGES = 12
-MAX_TEXT_CHARS = 28_000  # 所有附件合计展开的文字上限
+MAX_TEXT_CHARS = 20_000  # 所有附件合计展开的文字上限（留出课程证据的预算）
 MAX_IMAGE_PAGES = 8  # 所有附件合计送给模型的页面图片上限
 MAX_IMAGE_SIDE = 1600
 TOKEN = re.compile(r"^[0-9a-f]{24}$")
