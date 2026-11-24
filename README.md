@@ -168,10 +168,10 @@ tests/          pytest 测试
 ## 测试
 
 ```bash
-uv run pytest
+uv run pytest -m "not office"
 ```
 
-需要 Office 的转换测试标记为 `office`，可用 `uv run pytest -m "not office"` 跳过。
+只装基础依赖（`uv sync`）即可运行非 Office 的全部测试；依赖 `numpy` / `torch` 的本地语音识别测试在未安装 `--extra asr` 时会自动跳过。需要本机 Microsoft Office 的转换测试标记为 `office`，装有 Office 时可运行 `uv run pytest` 全量测试。
 
 ## 打包成 setup.exe
 

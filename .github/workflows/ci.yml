@@ -1,0 +1,37 @@
+# 在每次推送和 Pull Request 上运行基础测试套件（跳过需要本机 Microsoft Office 的测试）。
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONIOENCODING: utf-8
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: 安装依赖
+        run: |
+          uv python install 3.12
+          uv sync --frozen
+
+      - name: 运行测试
+        run: uv run pytest -m "not office" -q
