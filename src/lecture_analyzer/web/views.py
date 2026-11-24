@@ -157,11 +157,14 @@ def _kp_chapters(library: Library, course: Course) -> list[tuple[str, list[KPRow
     memory = CourseMemory(library)
     cache = LectureCache(library)
     history = memory.history_signals(course)
+    by_key: dict[int, list[HistorySignal]] = {}
+    for signal in history:  # 先按知识点编号分组，避免每个知识点都遍历全课信号
+        by_key.setdefault(signal.key, []).append(signal)
     stats = signal_stats(history)
     reviewed = library.reviewed_names(course.id)
     hits = material_hits(library, course)
     return [
-        (chapter, [_kp_row(kp, stats.get(kp.key, {}), history, reviewed, cache, hits.get(kp.key, []))
+        (chapter, [_kp_row(kp, stats.get(kp.key, {}), by_key.get(kp.key, ()), reviewed, cache, hits.get(kp.key, []))
                    for kp in points])
         for chapter, points in group_by_chapter(memory.tree(course))
     ]
@@ -177,7 +180,7 @@ def _kp_row(
         for a in kp.appearances
     ]
     signals = [(SIGNAL_LABELS.get(t, t), v["count"]) for t, v in stats.items()]
-    priority = kp_priority([s for s in history if s.key == kp.key], len({a.seq for a in kp.appearances}), hits)
+    priority = kp_priority(history, len({a.seq for a in kp.appearances}), hits)
     return KPRow(kp, normalize_zh(kp.name), appearances, signals, is_reviewed(kp, reviewed), priority)
 
 
@@ -334,8 +337,10 @@ def material_rows(library: Library, course: Course) -> list[MaterialRow]:
     store = MaterialStore(library)
     stale = {m.id for m in stale_materials(library, course)}
     materials = store.list(course)
+    pages = store.page_counts(course)
+    items = store.item_counts(course)
     same = same_source(materials)
-    return [MaterialRow(m, len(store.pages(m.id)), len(store.items(m.id)), m.id in stale, same.get(m.id))
+    return [MaterialRow(m, pages.get(m.id, 0), items.get(m.id, 0), m.id in stale, same.get(m.id))
             for m in materials]
 
 
@@ -473,8 +478,8 @@ def _key_signals(signals: Sequence[CheckedSignal], signal_kps: Sequence[int | No
 def _references(memory: CourseMemory, lecture: Lecture, notes: LectureNotes | None, data: LectureCache) -> list[dict]:
     result = []
     for ref in memory.references(lecture.id):
-        here = notes.knowledge_points[ref.note_index - 1].name if notes and ref.note_index <= len(
-            notes.knowledge_points) else ""
+        here = (notes.knowledge_points[ref.note_index - 1].name
+                if notes and 1 <= ref.note_index <= len(notes.knowledge_points) else "")
         result.append({
             "relation": RELATION_LABELS.get(ref.relation, ref.relation),
             "t": first_time(ref.segment_ids, data.segments(lecture.id)),

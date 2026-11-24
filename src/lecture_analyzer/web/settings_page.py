@@ -111,8 +111,8 @@ async def save_profile(request: Request, name: str) -> RedirectResponse:
     name = _profile_name(request, name)
 
     def change(cfg: AppConfig) -> tuple[AppConfig, str]:
-        cfg = config_edit.set_profile_model(cfg, name, form.get("model", ""))
-        return config_edit.set_profile_base_url(cfg, name, form.get("base_url", "")), f"已保存「{name}」的型号和接口地址"
+        return (config_edit.set_profile(cfg, name, form.get("model", ""), form.get("base_url", "")),
+                f"已保存「{name}」的型号和接口地址")
 
     _apply(request, change)
     return redirect(f"/settings#model-{name}")

@@ -40,14 +40,31 @@ class Form(dict[str, str]):
         return self.lists.get(name, [])
 
 
+class BodyTooLargeError(Exception):
+    """请求体超出允许的大小上限。"""
+
+
+async def read_body_limited(request: Request, limit: int) -> bytes:
+    """流式读取请求体并限制上限；既先看 Content-Length，也按实际收到的分块字节计数。"""
+    declared = request.headers.get("content-length")
+    if declared is not None and (not declared.isdigit() or int(declared) > limit):
+        raise BodyTooLargeError
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise BodyTooLargeError
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def read_form(request: Request, max_bytes: int = MAX_FORM_BYTES, max_fields: int = MAX_FORM_FIELDS) -> Form:
     """读取 application/x-www-form-urlencoded 表单并校验令牌。"""
-    declared = request.headers.get("content-length") or "0"
-    if not declared.isdigit() or int(declared) > max_bytes:
-        raise HTTPException(413, "表单内容过长")
-    body = await request.body()
-    if len(body) > max_bytes:
-        raise HTTPException(413, "表单内容过长")
+    try:
+        body = await read_body_limited(request, max_bytes)
+    except BodyTooLargeError:
+        raise HTTPException(413, "表单内容过长") from None
     try:
         fields = parse_qs(body.decode("utf-8"), keep_blank_values=True, max_num_fields=max_fields,
                           strict_parsing=False)

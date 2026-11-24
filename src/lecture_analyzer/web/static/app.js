@@ -205,7 +205,7 @@
         }
         const actions = document.getElementById("job-actions");
         if (actions) actions.remove();
-        if (data.url && data.url.startsWith("/")) {
+        if (data.url && data.url.startsWith("/") && !data.url.startsWith("//")) {
           document.getElementById("job-link").href = data.url;
           document.getElementById("job-result").hidden = false;
           if (!(data.warnings && data.warnings.length)) setTimeout(function () { location.href = data.url; }, 1200);
@@ -457,7 +457,7 @@
   document.addEventListener("click", function (event) {
     const target = event.target;
     if (target.closest("#theme-button, [data-open-theme]")) {
-      openMenu(menu.hidden);
+      if (menu) openMenu(menu.hidden);
       return;
     }
     const option = target.closest("[data-set-theme]");

@@ -112,6 +112,32 @@ def set_general(cfg: AppConfig, digest_workers: int) -> AppConfig:
     return update_config(cfg, {("materials", "digest_workers"): digest_workers})
 
 
+def _validate_base_url(url: str) -> str:
+    value = clean_value(url)
+    if value and not re.match(r"^https?://[^\s/]+", value):
+        raise ConfigError("接口地址要以 http:// 或 https:// 开头")
+    return value
+
+
+def set_profile(cfg: AppConfig, name: str, model: str, url: str) -> AppConfig:
+    """同时保存档案的型号和接口地址：两项都校验通过后才落盘，避免前一项已写、后一项报错造成半写入。"""
+    profile = cfg.profile(name)
+    model_value = clean_value(model)
+    url_value = _validate_base_url(url)
+    toml_changes: dict[tuple[str, ...], Any] = {}
+    if profile.model_env:
+        set_env(cfg, profile.model_env, model_value)
+    else:
+        toml_changes[("models", name, "model")] = model_value
+    if profile.base_url_env:
+        set_env(cfg, profile.base_url_env, url_value)
+    else:
+        toml_changes[("models", name, "base_url")] = url_value or None
+    if toml_changes:
+        return update_config(cfg, toml_changes)
+    return load_config(config_file(cfg))
+
+
 def set_profile_model(cfg: AppConfig, name: str, model: str) -> AppConfig:
     """型号：档案设置了 model_env 时写进 .env（优先于 config.toml），否则写进 config.toml。"""
     profile = cfg.profile(name)
@@ -125,9 +151,7 @@ def set_profile_model(cfg: AppConfig, name: str, model: str) -> AppConfig:
 def set_profile_base_url(cfg: AppConfig, name: str, url: str) -> AppConfig:
     """接口地址：留空表示直连官方接口。档案设置了 base_url_env 时写进 .env，否则写进 config.toml。"""
     profile = cfg.profile(name)
-    value = clean_value(url)
-    if value and not re.match(r"^https?://[^\s/]+", value):
-        raise ConfigError("接口地址要以 http:// 或 https:// 开头")
+    value = _validate_base_url(url)
     if profile.base_url_env:
         set_env(cfg, profile.base_url_env, value)
         return load_config(config_file(cfg))
@@ -155,7 +179,14 @@ def set_env(cfg: AppConfig, name: str, value: str) -> None:
         lines = [line if index == first else text for index, text in enumerate(lines) if index not in matches[1:]]
     else:
         lines.append(line)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # 原子替换 .env，避免写入中断或并发读取看到半截内容
+    fd, temp = tempfile.mkstemp(prefix=".env-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as file:
+            file.write("\n".join(lines) + "\n")
+        os.replace(temp, path)
+    finally:
+        Path(temp).unlink(missing_ok=True)
     if value:
         os.environ[name] = value
     else:

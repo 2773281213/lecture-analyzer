@@ -73,9 +73,11 @@ def material_list(course: Annotated[str, typer.Argument(help="课程名")], conf
     with friendly_errors(), open_library(cfg) as library:
         target = library.course(course)
         store = MaterialStore(library)
-        rows = [(m, len(store.pages(m.id)), len(store.items(m.id))) for m in store.list(target)]
+        pages = store.page_counts(target)
+        items = store.item_counts(target)
+        rows = [(m, pages.get(m.id, 0), items.get(m.id, 0)) for m in store.list(target)]
         stale = {m.id for m in stale_materials(library, target)}
-    table = Table(title=f"「{target.name}」的资料（课件：{SLIDES_LABELS[target.slides]}）")
+    table = Table(title=f"「{escape(target.name)}」的资料（课件：{SLIDES_LABELS[target.slides]}）")
     for column in ("编号", "类型", "标题", "页数", "识别", "题目", "来源"):
         table.add_column(column, overflow="fold")
     for material, digested, items in rows:

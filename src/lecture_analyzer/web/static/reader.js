@@ -8,6 +8,7 @@
   let partIndex = 0;
   let current = null;
   let pending = null; // 等文件加载完才能定位时的目标（整讲时间）：加载完之前按它显示，换节时不闪回这一节的开头
+  let pendingLoad = null; // 上一次未触发的 loadedmetadata 回调，连续跳转时先移除避免互相覆盖
 
   // 整讲时间落在哪一节：最后一个起点不晚于该时间的节
   const partAt = (ms) => {
@@ -23,8 +24,13 @@
 
   const seek = (ms, play) => {
     if (!player || !parts.length) return;
+    if (pendingLoad) {
+      player.removeEventListener("loadedmetadata", pendingLoad);
+      pendingLoad = null;
+    }
     const index = partAt(ms);
     const go = () => {
+      pendingLoad = null;
       player.currentTime = Math.max(0, (ms - parts[index].offset) / 1000);
       pending = null;
       if (play) player.play().catch(() => {}); // 浏览器禁止自动播放时，至少已跳到对应位置
@@ -35,6 +41,7 @@
     }
     // 要等这一节的文件加载完才能定位
     pending = ms;
+    pendingLoad = go;
     if (index !== partIndex) loadPart(index);
     player.addEventListener("loadedmetadata", go, { once: true });
   };

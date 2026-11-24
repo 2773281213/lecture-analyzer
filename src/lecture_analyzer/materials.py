@@ -178,6 +178,16 @@ class MaterialStore:
     def pages(self, material_id: int) -> list[PageDigest]:
         return self.library.pages("material", material_id)
 
+    def page_counts(self, course: Course) -> dict[int, int]:
+        """这门课各份资料已识别的页数：{material_id: count}，避免列表页逐份反序列化整页内容。"""
+        rows = self.conn.execute(
+            "SELECT m.id, COUNT(d.page_no) AS n FROM material m"
+            " JOIN doc_page d ON d.owner_type = 'material' AND d.owner_id = m.id"
+            " WHERE m.course_id = ? GROUP BY m.id",
+            (course.id,),
+        )
+        return {row["id"]: row["n"] for row in rows}
+
     def clear_pages(self, material_id: int) -> None:
         self.conn.execute("DELETE FROM doc_page WHERE owner_type = 'material' AND owner_id = ?", (material_id,))
         self.conn.commit()
@@ -223,6 +233,16 @@ class MaterialStore:
             keys.setdefault(row["item_id"], []).append(row["kp_key"])
         rows = self.conn.execute("SELECT * FROM material_item WHERE material_id = ? ORDER BY idx", (material_id,))
         return [_item(row, keys.get(row["id"], [])) for row in rows]
+
+    def item_counts(self, course: Course) -> dict[int, int]:
+        """这门课各份资料已拆出的题目或条目数：{material_id: count}。"""
+        rows = self.conn.execute(
+            "SELECT m.id, COUNT(i.id) AS n FROM material m"
+            " JOIN material_item i ON i.material_id = m.id"
+            " WHERE m.course_id = ? GROUP BY m.id",
+            (course.id,),
+        )
+        return {row["id"]: row["n"] for row in rows}
 
     def set_item_kps(self, material_id: int, mapping: dict[int, Sequence[int]]) -> None:
         """mapping：{题目编号 item.id: [知识点 K 编号]}，覆盖这份资料原有的对应关系。"""

@@ -141,6 +141,11 @@ class ServerThread:
         deadline = time.monotonic() + SERVER_START_SECONDS
         while not self.server.started:
             if not self.thread.is_alive() or time.monotonic() > deadline:
+                self.server.should_exit = True
+                try:
+                    self.socket.close()
+                except OSError:
+                    pass
                 raise RuntimeError("书架的网页服务没能启动，详情见 desktop.log")
             time.sleep(0.05)
         return self.url
@@ -264,8 +269,13 @@ class DesktopApp:
     def start_server(self, config: Path) -> str:
         from .web import create_app
 
-        self.server = ServerThread(create_app(load_config(config)))
-        return self.server.start()
+        if self.server is not None:  # 重复启动前先停掉旧服务，避免遗留后台线程和监听套接字
+            self.server.stop()
+            self.server = None
+        server = ServerThread(create_app(load_config(config)))
+        url = server.start()
+        self.server = server
+        return url
 
     def open_library(self, config: Path, welcome: bool) -> None:
         """首次设置完成：启动网页服务，窗口转到书架（新建的书库先到设置页）。

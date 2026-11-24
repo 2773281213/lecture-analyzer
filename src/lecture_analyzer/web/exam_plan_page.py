@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
@@ -209,7 +210,7 @@ def _number(value: str, label: str) -> float:
         number = float(text)
     except ValueError:
         raise HTTPException(400, f"{label}要填数字（现在是「{text}」）") from None
-    if number < 0 or number > 100_000:
+    if not math.isfinite(number) or number < 0 or number > 100_000:
         raise HTTPException(400, f"{label}不正确：{text}")
     return number
 

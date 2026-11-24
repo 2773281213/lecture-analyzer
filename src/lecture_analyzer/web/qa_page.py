@@ -12,40 +12,23 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from ..conversations import QAStore
 from ..jobs import Job, JobStore
 from ..knowledge import CourseMemory
-from ..library import Course, Library
+from ..library import Course, Library, LibraryError
 from ..pipeline.qa import MAX_QUESTION_CHARS
 from ..qa_attachments import (
     MAX_FILE_BYTES, MAX_FILES, AttachmentError, discard_attachment, discard_saved, get_attachment, human_size,
     mark_used, resolve_attachments, save_attachment,
 )
-from .forms import LONG_FORM_BYTES, enqueue, int_field, library_of, read_form, redirect
+from .forms import (
+    LONG_FORM_BYTES, BodyTooLargeError, enqueue, int_field, library_of, read_body_limited, read_form, redirect,
+)
 from .views import spine_color
 
 router = APIRouter()
 
 
-class _TooLarge(Exception):
-    pass
-
-
 def _csrf_ok(request: Request) -> bool:
     supplied = request.headers.get("x-csrf", "")
     return bool(supplied) and secrets.compare_digest(supplied, request.app.state.csrf_token)
-
-
-async def _body_limited(request: Request, limit: int) -> bytes:
-    """读请求体并限制大小；不信任 Content-Length，按实际收到的字节算。"""
-    declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > limit:
-        raise _TooLarge
-    chunks: list[bytes] = []
-    total = 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > limit:
-            raise _TooLarge
-        chunks.append(chunk)
-    return b"".join(chunks)
 
 
 def _ready_lectures(library: Library, course: Course) -> set[int]:
@@ -67,11 +50,14 @@ async def upload_attachment(request: Request, course_id: int) -> Response:
     if not _csrf_ok(request):
         return JSONResponse({"error": "页面令牌已失效，请刷新页面后重试"}, status_code=403)
     with library_of(request) as library:
-        library.course_by_id(course_id)  # 课程不存在时返回 404
+        try:
+            library.course_by_id(course_id)
+        except LibraryError:
+            return JSONResponse({"error": "没有这门课"}, status_code=404)
     name = request.query_params.get("name", "")
     try:
-        data = await _body_limited(request, MAX_FILE_BYTES)
-    except _TooLarge:
+        data = await read_body_limited(request, MAX_FILE_BYTES)
+    except BodyTooLargeError:
         return JSONResponse({"error": f"附件超过 {MAX_FILE_BYTES // (1024 * 1024)} MB，请压缩或拆分后再上传"},
                             status_code=413)
     try:
@@ -85,13 +71,19 @@ async def upload_attachment(request: Request, course_id: int) -> Response:
 def download_attachment(request: Request, course_id: int, token: str) -> FileResponse:
     """查看或下载提问里的附件；只按随机编号查找，不接受路径。"""
     with library_of(request) as library:
-        library.course_by_id(course_id)
+        try:
+            library.course_by_id(course_id)
+        except LibraryError:
+            raise HTTPException(404, "没有这门课") from None
     try:
         attachment = get_attachment(request.app.state.cfg.data_dir, course_id, token)
     except AttachmentError as exc:
         raise HTTPException(404, str(exc)) from None
-    return FileResponse(attachment.path, media_type=attachment.mime, filename=attachment.name,
-                        content_disposition_type="inline", headers={"Cache-Control": "private, max-age=86400"})
+    return FileResponse(
+        attachment.path, media_type=attachment.mime, filename=attachment.name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.delete("/courses/{course_id}/qa/attachments/{token}")
@@ -100,7 +92,10 @@ async def remove_attachment(request: Request, course_id: int, token: str) -> Res
     if not _csrf_ok(request):
         return JSONResponse({"error": "页面令牌已失效，请刷新页面后重试"}, status_code=403)
     with library_of(request) as library:
-        library.course_by_id(course_id)
+        try:
+            library.course_by_id(course_id)
+        except LibraryError:
+            return JSONResponse({"error": "没有这门课"}, status_code=404)
     removed = discard_attachment(request.app.state.cfg.data_dir, course_id, token, only_unused=True)
     return JSONResponse({"removed": removed})
 

@@ -28,8 +28,12 @@ def render_markdown(text: str | None) -> Markup:
         spans.append(match.group(0))
         return f"{_OPEN}{len(spans) - 1}{_CLOSE}"
 
+    def restore(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        return str(escape(spans[index])) if index < len(spans) else match.group(0)
+
     html = _LEFTOVER_BOLD.sub(r"<strong>\1</strong>", _MARKDOWN.render(_MATH.sub(stash, text or "")))
-    return Markup(_PLACEHOLDER.sub(lambda m: str(escape(spans[int(m.group(1))])), html))
+    return Markup(_PLACEHOLDER.sub(restore, html))
 
 
 def kp_url(course_id: int, key: int) -> str:
