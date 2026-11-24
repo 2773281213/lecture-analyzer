@@ -26,7 +26,7 @@ from xml.etree import ElementTree
 
 import pymupdf
 
-from .documents import iter_pages, read_text_any
+from .documents import iter_pages, pixmap_to_png, read_text_any
 from .library import LibraryError
 
 Report = Callable[[str], None]
@@ -141,15 +141,17 @@ def get_attachment(data_dir: Path, course_id: int, token: str) -> StoredAttachme
     meta_path = folder / "meta.json"
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if not isinstance(meta, dict) or int(meta.get("course_id", 0)) != course_id:
+            raise ValueError("课程不匹配")
+        suffix = str(meta.get("suffix", "")).lower()
+        if suffix not in SUPPORTED_SUFFIXES:
+            raise ValueError("后缀不受支持")
+        content = folder / f"content{suffix}"
+        if not content.is_file():
+            raise FileNotFoundError(content)
+        return _stored(meta, content)
+    except (OSError, ValueError, TypeError):
         raise AttachmentError("附件不存在或已经被清理，请重新添加") from None
-    if not isinstance(meta, dict) or int(meta.get("course_id", 0)) != course_id:
-        raise AttachmentError("附件不存在或已经被清理，请重新添加")
-    suffix = str(meta.get("suffix", ""))
-    content = folder / f"content{suffix}"
-    if not content.is_file():
-        raise AttachmentError("附件文件不存在或已经被清理，请重新添加")
-    return _stored(meta, content)
 
 
 def resolve_attachments(data_dir: Path, course_id: int, tokens: Sequence[str]) -> list[StoredAttachment]:
@@ -245,6 +247,8 @@ def read_attachments(attachments: Sequence[StoredAttachment], work_root: Path,
             if content.has_text:  # 文字额度被前面的附件用完，至少告诉模型这份附件存在但没展开
                 content.text = "（附件文字较长，前面附件已用完展开额度，这里没有展开）"
                 content.truncated = True
+            elif content.truncated:  # 图片额度被前面的附件用完，同样告知模型附件存在
+                content.text = "（前面的附件已用完图片展开额度，这里没有展开）"
             else:
                 raise AttachmentError(f"附件「{item.name}」里没有可读取的内容")
         contents.append(content)
@@ -280,7 +284,8 @@ def _read_pdf(item: StoredAttachment, text_budget: int, image_budget: int) -> At
     remaining = max(text_budget, 0)
     has_text = False
     truncated = False
-    with pymupdf.open(str(item.path)) as doc:
+    # 从内存打开：文件损坏时 PyMuPDF 不会一直占着文件句柄（Windows 上占着就删不掉）
+    with pymupdf.open(stream=item.path.read_bytes(), filetype="pdf") as doc:
         total = len(doc)
         for page_no, page in enumerate(doc, start=1):
             if page_no > MAX_PAGES:
@@ -325,19 +330,21 @@ def _read_pptx(item: StoredAttachment, text_budget: int) -> AttachmentContent:
         names.sort(key=lambda name: int(re.search(r"(\d+)", Path(name).stem).group(1)))  # type: ignore[union-attr]
         lines: list[str] = []
         remaining = max(text_budget, 0)
+        has_text = False
         truncated = len(names) > MAX_PAGES
         for page_no, name in enumerate(names[:MAX_PAGES], start=1):
             root = ElementTree.fromstring(archive.read(name))
             text = "\n".join(node.text or "" for node in root.iter(f"{_A_NS}t")).strip()
             if not text:
                 continue
+            has_text = True
             fitted, cut = _fit_text(f"【第 {page_no} 页】\n{text}", remaining)
             if fitted:
                 lines.append(fitted)
                 remaining = max(remaining - len(fitted), 0)
             truncated = truncated or cut
     text = "\n\n".join(lines)
-    return AttachmentContent(item, text, max(len(names), 1), has_text=bool(text), truncated=truncated)
+    return AttachmentContent(item, text, max(len(names), 1), has_text=has_text, truncated=truncated)
 
 
 def _read_legacy_office(item: StoredAttachment, work: Path, text_budget: int,
@@ -386,21 +393,11 @@ def _fit_text(text: str, budget: int) -> tuple[str, bool]:
 
 
 def _page_png(page: pymupdf.Page) -> bytes:
-    return _pixmap_png(page.get_pixmap(dpi=110))
+    return pixmap_to_png(page.get_pixmap(dpi=110), MAX_IMAGE_SIDE)
 
 
 def _image_file_png(path: Path) -> bytes:
-    return _pixmap_png(pymupdf.Pixmap(str(path)))
-
-
-def _pixmap_png(pix: pymupdf.Pixmap) -> bytes:
-    if pix.colorspace is not None and pix.colorspace.n >= 4:
-        pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
-    longest = max(pix.width, pix.height)
-    if longest > MAX_IMAGE_SIDE:
-        scale = MAX_IMAGE_SIDE / longest
-        pix = pymupdf.Pixmap(pix, int(pix.width * scale), int(pix.height * scale), None)
-    return pix.tobytes("png")
+    return pixmap_to_png(pymupdf.Pixmap(str(path)), MAX_IMAGE_SIDE)
 
 
 def _stored(meta: Mapping[str, object], content: Path) -> StoredAttachment:

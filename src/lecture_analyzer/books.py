@@ -16,6 +16,7 @@ from typing import Any
 from .exam_plans import ExamPlan, ExamPlanStore, plan_text
 from .knowledge import CourseMemory, KnowledgePoint
 from .library import EXAM_PLAN_LABELS, Course, Lecture, Library
+from .locks import UI_WAIT, hold, memory_lock
 from .materials import MaterialStore
 from .pipeline.report_render import render_report_markdown
 from .pipeline.review import ChapterView, render_review_markdown, review_book
@@ -26,6 +27,7 @@ from .reports import ReportStore, StoredReport
 BOOK_SCHEMA_VERSION = 3
 VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
 def media_type(path: str) -> str:
@@ -38,8 +40,11 @@ def lecture_media_type(lecture: Lecture) -> str:
 
 
 def safe_name(name: str) -> str:
-    """去掉 Windows 文件名里不允许的字符。"""
-    return _UNSAFE_CHARS.sub("_", name).strip(" .") or "未命名"
+    """去掉 Windows 文件名里不允许的字符，并规避 CON/NUL 等系统保留名。"""
+    cleaned = _UNSAFE_CHARS.sub("_", name).strip(" .") or "未命名"
+    if cleaned.split(".")[0].upper() in _RESERVED_NAMES:
+        cleaned = f"_{cleaned}"
+    return cleaned
 
 
 def course_dir(data_dir: Path, course: Course) -> Path:
@@ -183,9 +188,11 @@ def report_filename(report: StoredReport) -> str:
 
 def remove_report(library: Library, data_dir: Path, course: Course, report: StoredReport) -> None:
     """删除一份考前报告：书库里的记录、导出的 Markdown，并更新 book.json 里的报告列表。"""
-    ReportStore(library).remove(report.id)
-    (course_dir(data_dir, course) / report_filename(report)).unlink(missing_ok=True)
-    export_course(library, data_dir, course)
+    with hold(memory_lock(data_dir, course.id), wait=UI_WAIT,
+              busy=f"「{course.name}」正在后台整合课程记忆或导出，请过一会儿再删除报告"):
+        ReportStore(library).remove(report.id)
+        (course_dir(data_dir, course) / report_filename(report)).unlink(missing_ok=True)
+        export_course(library, data_dir, course)
 
 
 def export_report(data_dir: Path, course: Course, report: StoredReport) -> Path:

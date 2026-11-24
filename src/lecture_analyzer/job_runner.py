@@ -61,11 +61,13 @@ class RunnerLock:
 
     def acquire(self) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        file = self.path.open("a+b")
+        file: IO[bytes] | None = None
         try:
+            file = self.path.open("a+b")
             lock_file(file)
-        except OSError:  # 别的进程拿着锁
-            file.close()
+        except OSError:  # 别的进程拿着锁或文件暂时不可打开
+            if file is not None:
+                file.close()
             return False
         self.file = file
         return True
@@ -206,6 +208,11 @@ class JobRunner:
                     JobStore(library).pause_interrupted()
         for process in processes.values():
             kill_tree(process)
+        current = threading.current_thread()
+        for thread in self._threads:
+            if thread is not current:
+                thread.join(timeout=15)
+        self._threads = []
         self._owner_lock.release()
         self.owner = False
 
@@ -232,16 +239,22 @@ class JobRunner:
     def _run(self, job_id: int) -> None:
         log = log_path(self.cfg.data_dir, job_id)
         log.parent.mkdir(parents=True, exist_ok=True)
-        with log.open("wb") as output:
-            process = self._launch(job_id, output)
-            if process is None:
-                return
-            code = self._wait(job_id, process)
+        process: subprocess.Popen[bytes] | None = None
         try:
+            with log.open("wb") as output:
+                process = self._launch(job_id, output)
+                if process is None:
+                    return
+                code = self._wait(job_id, process)
             self._settle(job_id, code, log)
+        except BaseException:
+            if process is not None and process.poll() is None:
+                kill_tree(process)
+            raise
         finally:  # 收尾之后才移出：清理失败时不会删掉还在收尾的任务，running() 为空时状态都已写好
-            with self._lock:
-                self._processes.pop(job_id, None)
+            if process is not None:
+                with self._lock:
+                    self._processes.pop(job_id, None)
 
     def _launch(self, job_id: int, output: IO[bytes]) -> subprocess.Popen[bytes] | None:
         """标为进行中并启动子进程；任务已被取消、书架正在关闭时返回 None。"""
@@ -261,13 +274,16 @@ class JobRunner:
             return process
 
     def _wait(self, job_id: int, process: subprocess.Popen[bytes]) -> int:
-        """等子进程结束；任务在别的书架程序里被取消或暂停（只改了任务表）时结束它。"""
+        """等子进程结束；任务在别的书架程序里被取消、暂停或删除时结束它。"""
         while True:
             try:
                 return process.wait(timeout=CANCEL_POLL_SECONDS)
             except subprocess.TimeoutExpired:
                 with Library(self.db_path) as library:
-                    stopped = JobStore(library).get(job_id).state in ("cancelled", "paused")
+                    try:
+                        stopped = JobStore(library).get(job_id).state in ("cancelled", "paused")
+                    except LibraryError:  # 任务记录已被清理（例如课程被删除）
+                        stopped = True
                 if stopped:
                     kill_tree(process)
 

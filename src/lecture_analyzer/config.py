@@ -235,9 +235,9 @@ def _with_fallback(
 def load_config(path: Path | None = None) -> AppConfig:
     config_path = find_config_path(path)
     load_env_file(config_path.parent / ".env")
-    with config_path.open("rb") as f:
-        raw = tomllib.load(f)
     try:
+        with config_path.open("rb") as f:
+            raw = tomllib.load(f)
         models = {
             name: _apply_model_env(ModelProfile(name=name, **values)) for name, values in raw.get("models", {}).items()
         }
@@ -261,5 +261,5 @@ def load_config(path: Path | None = None) -> AppConfig:
             steps=steps,
             effort={**DEFAULT_EFFORT, **raw.get("effort", {})},
         )
-    except ValidationError as exc:
+    except (ValidationError, tomllib.TOMLDecodeError, OSError, TypeError, AttributeError) as exc:
         raise ConfigError(f"配置文件 {config_path} 有误：\n{exc}") from exc

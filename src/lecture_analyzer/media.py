@@ -23,10 +23,10 @@ def ffmpeg_exe() -> str:
 
 
 def run_ffmpeg(args: list[str]) -> None:
-    cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", *args]
-    # 不带 NO_WINDOW 的话，桌面程序每转一片音频都会在屏幕上闪一个黑窗口
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            creationflags=NO_WINDOW)
+    cmd = [ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *args]
+    # 不带 NO_WINDOW 的话，桌面程序每转一片音频都会在屏幕上闪一个黑窗口；接空标准输入防止交互卡住
+    result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                            errors="replace", creationflags=NO_WINDOW)
     if result.returncode != 0:
         raise MediaError(f"ffmpeg 执行失败：{result.stderr.strip()[-800:]}")
 

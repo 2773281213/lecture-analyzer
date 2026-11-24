@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 
 def format_ms(ms: int) -> str:
     """毫秒转成 mm:ss，超过一小时为 h:mm:ss。"""
@@ -21,6 +23,6 @@ def parse_timecode(text: str) -> int:
     seconds = float(pieces[-1])
     minutes = int(pieces[-2])
     hours = int(pieces[0]) if len(pieces) == 3 else 0
-    if seconds < 0 or minutes < 0 or hours < 0:
+    if not math.isfinite(seconds) or seconds < 0 or minutes < 0 or hours < 0:
         raise ValueError(f"无法解析的时间：{text!r}")
     return int(round((hours * 3600 + minutes * 60 + seconds) * 1000))

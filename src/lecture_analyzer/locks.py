@@ -116,7 +116,11 @@ def _acquire(path: Path, wait: float | None) -> bool:
     elif not entry.guard.acquire(blocking=False):
         return False
     if entry.depth == 0:
-        file = _lock_file(path, deadline)
+        try:
+            file = _lock_file(path, deadline)
+        except BaseException:
+            entry.guard.release()
+            raise
         if file is None:
             entry.guard.release()
             return False
@@ -139,12 +143,14 @@ def _release(path: Path) -> None:
 def _lock_file(path: Path, deadline: float | None) -> IO[bytes] | None:
     path.parent.mkdir(parents=True, exist_ok=True)
     while True:
-        file = path.open("a+b")  # 每次重新打开：锁文件被删掉后不会锁在已删除的文件上
+        file: IO[bytes] | None = None
         try:
+            file = path.open("a+b")  # 每次重新打开：锁文件被删掉后不会锁在已删除的文件上
             lock_file(file)
             return file
-        except OSError:  # 别的进程拿着锁
-            file.close()
+        except OSError:  # 别的进程拿着锁，或 Windows 上锁文件刚被删除尚未完成回收
+            if file is not None:
+                file.close()
         if deadline is not None and time.monotonic() >= deadline:
             return None
         time.sleep(POLL_SECONDS)

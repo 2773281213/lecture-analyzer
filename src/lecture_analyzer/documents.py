@@ -214,12 +214,18 @@ def _word_to_pdf(src: Path, out: Path) -> None:
             app.Quit()
 
 
-def _load_image_png(path: Path, max_side: int) -> bytes:
-    pix = pymupdf.Pixmap(str(path))
+def pixmap_to_png(pix: pymupdf.Pixmap, max_side: int) -> bytes:
+    """把 PyMuPDF 的像素图转成 PNG：CMYK 转 RGB，超长边按比例缩放（至少 1 像素）。"""
     if pix.colorspace is not None and pix.colorspace.n >= 4:  # CMYK 转 RGB，PNG 不支持 CMYK
         pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
     longest = max(pix.width, pix.height)
     if longest > max_side:
         scale = max_side / longest
-        pix = pymupdf.Pixmap(pix, int(pix.width * scale), int(pix.height * scale), None)
+        width = max(1, round(pix.width * scale))
+        height = max(1, round(pix.height * scale))
+        pix = pymupdf.Pixmap(pix, width, height, None)
     return pix.tobytes("png")
+
+
+def _load_image_png(path: Path, max_side: int) -> bytes:
+    return pixmap_to_png(pymupdf.Pixmap(str(path)), max_side)
