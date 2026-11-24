@@ -31,7 +31,7 @@ def show(
         stored = ExamPlanStore(library).get(target)
     console.print(f"[bold]「{escape(target.name)}」考试方案：{EXAM_PLAN_LABELS[target.exam_plan]}[/bold]")
     if stored is None or stored.plan is None:
-        console.print(f"还没有考试方案：`lec plan analyze {course}`（默认从第 1 讲分析），或在书架的课程页填写")
+        console.print(f"还没有考试方案：`lec plan analyze {escape(course)}`（默认从第 1 讲分析），或在书架的课程页填写")
         return
     console.print(escape(plan_text(stored.plan) or "（没有内容）"))
     for group in (stored.plan.question_types, stored.plan.answer_rules, stored.plan.scope, stored.plan.components):
@@ -59,7 +59,7 @@ def analyze(
     text = None
     if text_file is not None:
         try:
-            text = text_file.read_text(encoding="utf-8")
+            text = text_file.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError as exc:
             console.print(f"[red]考试说明需要是 UTF-8 编码：{escape(str(text_file))}[/red]")
             raise typer.Exit(1) from exc
@@ -69,7 +69,7 @@ def analyze(
         analysis = analyze_exam_plan(cfg, library, target, lecture_id, text, report=progress)
     console.print(f"[green]已分析[/green]：{escape(analysis.summary)}")
     console.print(escape(plan_text(analysis.plan) or "（没有内容）"))
-    console.print(f"核对后确认：`lec plan confirm {course}`（要修改请在书架的课程页里改）")
+    console.print(f"核对后确认：`lec plan confirm {escape(course)}`（要修改请在书架的课程页里改）")
 
 
 @plan_app.command("confirm")
@@ -84,9 +84,9 @@ def confirm(
         noted = sum(library.notes(x.id) is not None for x in library.lectures(target))
     console.print(f"[green]已确认[/green]「{escape(target.name)}」的考试方案")
     if changed and noted:
-        console.print(f"已有 {noted} 讲按旧方案整理过笔记：运行 `lec run {course} --force extract` 按新方案重新整理")
+        console.print(f"已有 {noted} 讲按旧方案整理过笔记：运行 `lec run {escape(course)} --force extract` 按新方案重新整理")
     else:
-        console.print(f"运行 `lec run {course}` 接着处理")
+        console.print(f"运行 `lec run {escape(course)}` 接着处理")
 
 
 @plan_app.command("skip")
@@ -98,4 +98,4 @@ def skip(
     cfg = load_cfg(config)
     with friendly_errors(), open_library(cfg) as library:
         target = ExamPlanStore(library).skip(library.course(course))
-    console.print(f"已跳过「{escape(target.name)}」的考试方案：运行 `lec run {course}` 接着处理")
+    console.print(f"已跳过「{escape(target.name)}」的考试方案：运行 `lec run {escape(course)}` 接着处理")

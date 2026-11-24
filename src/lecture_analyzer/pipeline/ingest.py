@@ -14,7 +14,7 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 from collections.abc import Callable, Iterator, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -227,7 +227,7 @@ def digest_material(cfg: AppConfig, library: Library, material: Material, report
     errors: list[BaseException] = []
     with ThreadPoolExecutor(max_workers=max(cfg.materials.digest_workers, 1)) as pool:
         futures = [pool.submit(_digest_batch, cfg, folder, batch, subject) for batch in batches]
-        for future in futures:
+        for future in as_completed(futures):  # 谁先完成就先落库并回报进度，不被前面慢批次阻塞
             digests, usage = _result_or_error(future, errors)
             if digests is None:
                 continue

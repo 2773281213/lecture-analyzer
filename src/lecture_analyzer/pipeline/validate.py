@@ -38,23 +38,44 @@ class TranscriptIndex:
         self.text = "".join(parts)
         self.count = len(segments)
 
-    def window(self, segment_ids: Sequence[int]) -> str:
-        """引用句子（编号从 1 开始）前后各放宽 1 句的拼接文本；编号全部无效时返回空串。"""
+    def _window_bounds(self, segment_ids: Sequence[int]) -> tuple[int, int] | None:
         valid = [i for i in segment_ids if 1 <= i <= self.count]
         if not valid:
-            return ""
+            return None
         first, last = max(min(valid) - 1, 1), min(max(valid) + 1, self.count)
         end = self.starts[last] if last < self.count else len(self.text)
-        return self.text[self.starts[first - 1] : end]
+        return self.starts[first - 1], end
+
+    def _span_to_ids(self, start: int, length: int) -> list[int]:
+        first = bisect_right(self.starts, start)
+        last = bisect_right(self.starts, start + length - 1)
+        return list(range(first, last + 1))
+
+    def window(self, segment_ids: Sequence[int]) -> str:
+        """引用句子（编号从 1 开始）前后各放宽 1 句的拼接文本；编号全部无效时返回空串。"""
+        bounds = self._window_bounds(segment_ids)
+        return "" if bounds is None else self.text[bounds[0] : bounds[1]]
 
     def locate(self, quote: str) -> list[int] | None:
         """在全文中查找，返回原话覆盖的句子编号。"""
+        if not quote:
+            return None
         position = self.text.find(quote)
         if position < 0:
             return None
-        first = bisect_right(self.starts, position)
-        last = bisect_right(self.starts, position + len(quote) - 1)
-        return list(range(first, last + 1))
+        return self._span_to_ids(position, len(quote))
+
+    def locate_in_window(self, quote: str, segment_ids: Sequence[int]) -> list[int] | None:
+        """只在引用句子窗口（前后各放宽 1 句）内精确查找，避免全文查找误跳到前面重复出现过的句子。"""
+        if not quote:
+            return None
+        bounds = self._window_bounds(segment_ids)
+        if bounds is None:
+            return None
+        position = self.text.find(quote, bounds[0], bounds[1])
+        if position < 0:
+            return None
+        return self._span_to_ids(position, len(quote))
 
 
 def validate_signals(signals: Sequence[Signal], segments: Sequence[Segment]) -> list[CheckedSignal]:

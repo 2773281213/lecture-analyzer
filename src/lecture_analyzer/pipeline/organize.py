@@ -23,6 +23,7 @@ from ..knowledge import CourseMemory
 from ..library import Course, Lecture, Library, LibraryError
 from ..locks import UI_WAIT, discard, hold, lecture_lock, material_lock, materials_lock, memory_lock
 from ..materials import Material, MaterialStore
+from ..qa_attachments import root_of as qa_attachments_root
 from .ingest import material_dir, remove_material
 from .integrate import restore_prefix
 
@@ -94,8 +95,9 @@ def move_lecture(
     source = library.course_by_id(lecture.course_id)
     if source.id == target.id:
         raise LibraryError(f"第 {lecture.seq} 讲已经在「{target.name}」里了")
-    with (lecture_free(library, data_dir, lecture, "移动"), memory_free(data_dir, source, "移动讲"),
-          memory_free(data_dir, target, "移动讲")):
+    first, second = sorted((source, target), key=lambda item: item.id)  # 固定按课程编号加锁，避免两门课互移时死锁
+    with (lecture_free(library, data_dir, lecture, "移动"), memory_free(data_dir, first, "移动讲"),
+          memory_free(data_dir, second, "移动讲")):
         ensure_unblocked(reading_jobs(library, target), f"「{target.name}」", "把讲移进来")
         return _move(library, data_dir, lecture, source, target, seq)
 
@@ -152,8 +154,10 @@ def delete_materials(library: Library, data_dir: Path, course: Course, materials
     """删除这门课的几份资料（书库里的副本、识别结果和题目；原文件不受影响）。
     后台任务在处理别的讲和资料时也可以删除；其中某份正在识别、拆题或对应知识点，这门课正在导入资料，
     或有任务点名用到它们时不行。"""
+    # 按资料编号去重并排序后加锁，避免并发批量删除交叉等锁或重复删除同一份资料
+    ordered = sorted({material.id: material for material in materials}.values(), key=lambda item: item.id)
     with ExitStack() as stack:
-        for material in materials:
+        for material in ordered:
             busy = (f"「{material.title}」正在后台处理（识别、拆题或对应知识点），请等它处理完，"
                     "或在「后台任务」里暂停或取消后再删除")
             stack.enter_context(hold(material_lock(data_dir, material.id), wait=0, busy=busy))
@@ -162,23 +166,28 @@ def delete_materials(library: Library, data_dir: Path, course: Course, materials
                                  busy=f"「{course.name}」正在后台导入资料，请等导入完再删除资料"))
         store = MaterialStore(library)
         result = MaterialsDeleted(set(), [])
-        for material in materials:
+        for material in ordered:
             result.cancelled += cancel_orphans(library, course, "process_material", "materials", material.id)
             result.affected.update(store.lectures_using(material.id))
             remove_material(library, data_dir, material.id)
-    for material in materials:
+    for material in ordered:
         discard(material_lock(data_dir, material.id))
     return result
 
 
 def delete_course(library: Library, data_dir: Path, course: Course) -> None:
-    """删除整门课：书库数据、导出的书、各讲中间文件和资料副本。"""
+    """删除整门课：书库数据、导出的书、各讲中间文件、资料副本和问答附件。"""
     ensure_idle(library, course, "删除课程")
     lectures = library.lectures(course)
     materials = MaterialStore(library).list(course)
     library.delete_course(course.id)
     for lecture in lectures:
         shutil.rmtree(work_dir(data_dir, lecture.id), ignore_errors=True)
+        discard(lecture_lock(data_dir, lecture.id))
     for material in materials:
         shutil.rmtree(material_dir(data_dir, material.id), ignore_errors=True)
+        discard(material_lock(data_dir, material.id))
     shutil.rmtree(course_dir(data_dir, course), ignore_errors=True)
+    shutil.rmtree(qa_attachments_root(data_dir) / str(course.id), ignore_errors=True)
+    discard(memory_lock(data_dir, course.id))
+    discard(materials_lock(data_dir, course.id))

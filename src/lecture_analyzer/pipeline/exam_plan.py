@@ -183,7 +183,7 @@ def analyze_exam_plan(
         notes.append("这些资料还没拆成条目，没有参与分析：" + "、".join(pending))
     if assembled.trimmed:
         notes.append(trimmed_note(assembled.trimmed))
-    return PlanAnalysis(course, plan, result.usage, profile.model, "；".join(notes))
+    return PlanAnalysis(course, plan, result.usage, used.model, "；".join(notes))
 
 
 def to_plan(output: ExamPlanOutput, source: Lecture | None, segments: Sequence[Segment]) -> ExamPlan:
@@ -197,8 +197,8 @@ def to_plan(output: ExamPlanOutput, source: Lecture | None, segments: Sequence[S
         if index is None or source is None:
             return PlanEvidence(source="lecture", quote=quote, verified=False)
         method, ids = check_quote(quote, segment_ids, index)
-        if method in ("window", "fuzzy"):  # 编号可能偏了一两句：能逐字找到时，跳转录音用原话实际所在的句子
-            ids = index.locate(normalize_zh(quote)) or ids
+        if method in ("window", "fuzzy"):  # 编号可能偏了一两句：只在当前窗口内精确找实际句子，不误跳到前面重复句
+            ids = index.locate_in_window(normalize_zh(quote), ids) or ids
         valid_ids = [i for i in ids if 1 <= i <= len(segments)]
         start = segments[valid_ids[0] - 1].start_ms if valid_ids else None
         return PlanEvidence(source="lecture", quote=quote, lecture_id=source.id, seq=source.seq,

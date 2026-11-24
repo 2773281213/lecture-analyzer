@@ -97,7 +97,8 @@ def render_notes(
 def render_references(references: Sequence[Reference], notes: LectureNotes, segments: Sequence[Segment]) -> list[str]:
     lines = []
     for ref in references:
-        name = notes.knowledge_points[ref.note_index - 1].name if ref.note_index <= len(notes.knowledge_points) else ""
+        name = (notes.knowledge_points[ref.note_index - 1].name
+                if 1 <= ref.note_index <= len(notes.knowledge_points) else "")
         lines.append(
             f"- 【{RELATION_LABELS.get(ref.relation, ref.relation)}】[{_time_label(ref.segment_ids, segments)}] {name}"
             f" ← 第{ref.target_seq}讲「{ref.kp_name}」：{ref.explanation}"

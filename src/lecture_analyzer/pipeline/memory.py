@@ -151,7 +151,17 @@ def assemble(sections: Sequence[Section], budget: int, profile: ModelProfile, fi
     """按预算拼出输入文本。超出预算时按 (trim_rank, keep) 从小到大逐条裁剪；全部裁完仍超出就报错。"""
     fixed = math.ceil(fixed_chars * profile.tokens_per_char)
     current = [[item.full for item in section.items] for section in sections]
-    total = fixed + sum(estimate_tokens(_render(s, texts), profile) for s, texts in zip(sections, current))
+    # 逐段精确维护渲染后的字数（含换行、空段占位符和段间空行），避免估算漂移导致提前停裁或误报超预算
+    non_empty = [sum(bool(text) for text in texts) for texts in current]
+    char_sums = [sum(len(text) for text in texts if text) for texts in current]
+
+    def section_chars(index: int) -> int:
+        section = sections[index]
+        header = len(section.heading) + 4  # "## " + heading + "\n"
+        count = non_empty[index]
+        return header + (char_sums[index] + count - 1 if count else len(section.empty_text))
+
+    total_chars = sum(section_chars(i) for i in range(len(sections))) + max(len(sections) - 1, 0) * 2
     order = sorted(
         (
             (section.trim_rank, item.keep, si, ii)
@@ -161,11 +171,19 @@ def assemble(sections: Sequence[Section], budget: int, profile: ModelProfile, fi
     )
     trimmed: dict[str, int] = {}
     for _, _, si, ii in order:
-        if total <= budget:
+        if fixed + math.ceil(total_chars * profile.tokens_per_char) <= budget:
             break
-        item = sections[si].items[ii]
-        total -= estimate_tokens(item.full, profile) - estimate_tokens(item.short, profile)
-        current[si][ii] = item.short
+        old = current[si][ii]
+        new = sections[si].items[ii].short
+        before = section_chars(si)
+        if old:
+            non_empty[si] -= 1
+            char_sums[si] -= len(old)
+        if new:
+            non_empty[si] += 1
+            char_sums[si] += len(new)
+        total_chars += section_chars(si) - before
+        current[si][ii] = new
         trimmed[sections[si].heading] = trimmed.get(sections[si].heading, 0) + 1
     text = "\n\n".join(_render(s, texts) for s, texts in zip(sections, current))
     tokens = fixed + estimate_tokens(text, profile)

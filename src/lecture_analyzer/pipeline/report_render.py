@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..render import table_cell
 from ..timecode import format_ms
 
 Lines = list[str]
@@ -83,7 +84,8 @@ def type_brief(row: dict[str, Any]) -> str:
 def _plan_lines(result: dict[str, Any]) -> list[str]:
     lines = ["", "## 题型与分值（考试方案）" + (f"：{result['plan_form']}" if result.get("plan_form") else ""), "",
              "| 题型 | 分值 | 说明 |", "| --- | --- | --- |"]
-    lines += [f"| {row['name']} | {type_brief(row) or '未提及'} | {row['note']} |" for row in result["plan_table"]]
+    lines += [f"| {table_cell(row['name'])} | {type_brief(row) or '未提及'} | {table_cell(row['note'])} |"
+              for row in result["plan_table"]]
     if result.get("answer_rules"):
         lines += ["", "**答题要求**", ""]
         lines += [f"- {'［' + r['type'] + '］' if r['type'] else ''}{r['text']}" for r in result["answer_rules"]]

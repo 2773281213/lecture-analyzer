@@ -101,8 +101,8 @@ def _ping(profile: ModelProfile) -> str:
 def _print_remote_models(cfg: AppConfig, name: str) -> None:
     try:
         profile = cfg.profile(name)
-        # 列型号不需要 model 字段，用占位型号创建适配器
-        probe = profile.model_copy(update={"model": profile.model or "-"})
+        # 列型号不需要 model 字段，用占位型号创建适配器；不构造备用档案，只查当前档案
+        probe = profile.model_copy(update={"model": profile.model or "-", "fallback_profile": None})
         names = create_provider(probe).list_remote_models()
     except (ConfigError, LLMError, NotImplementedError) as exc:
         console.print(f"[red]{escape(str(exc))}[/red]")
@@ -258,8 +258,8 @@ def course_list(config: ConfigOption = None) -> None:
         table.add_column(column)
     for course, count in rows:
         settings = course.settings
-        table.add_row(course.name, settings.subject, settings.teaching_description,
-                      SLIDES_LABELS[course.slides], course.asr or "按 config.toml",
+        table.add_row(escape(course.name), escape(settings.subject), settings.teaching_description,
+                      SLIDES_LABELS[course.slides], escape(course.asr or "按 config.toml"),
                       f"{len(course.instructions)} 字" if course.instructions else "-", str(count))
     console.print(table)
 
@@ -310,11 +310,15 @@ def lecture_add_part(
     config: ConfigOption = None,
 ) -> None:
     """给已有的一讲追加节（按顺序接在后面）。已转写的节不会重新转写。"""
+    from .locks import hold, lecture_lock
+
     cfg = load_cfg(config)
     with friendly_errors(), open_library(cfg) as library:
         lecture = library.lecture(library.course(course), seq)
-        for path in media:
-            lecture = library.add_part(lecture.id, path.resolve())
+        busy = f"第 {lecture.seq} 讲正在后台处理，请等这一讲处理完后再追加节"
+        with hold(lecture_lock(cfg.data_dir, lecture.id), wait=0, busy=busy):
+            for path in media:
+                lecture = library.add_part(lecture.id, path.resolve())
     console.print(f"第 {seq} 讲现在共 {len(lecture.parts)} 节，运行 `lec run {escape(course)} {seq}` 重新处理")
 
 
@@ -388,8 +392,8 @@ def lecture_list(
             progress += "（课程记忆待更新）"
         duration = format_ms(lecture.duration_ms) if lecture.duration_ms else "-"
         files = "\n".join(escape(Path(part.media_path).name) for part in lecture.parts)
-        table.add_row(names[lecture.course_id], str(lecture.seq), escape(lecture.title or "-"), str(len(lecture.parts)),
-                      duration, progress, files)
+        table.add_row(escape(names[lecture.course_id]), str(lecture.seq), escape(lecture.title or "-"),
+                      str(len(lecture.parts)), duration, progress, files)
     console.print(table)
 
 
@@ -427,8 +431,8 @@ def run(
             )
         except AwaitingExamPlan as exc:  # 停在整理笔记之前，不算出错
             console.print(f"[yellow]{escape(str(exc))}[/yellow]")
-            console.print(f"查看：`lec plan show {course}`；确认：`lec plan confirm {course}`；"
-                          f"跳过：`lec plan skip {course}`。确认后再运行 `lec run {course}` 接着处理")
+            console.print(f"查看：`lec plan show {escape(course)}`；确认：`lec plan confirm {escape(course)}`；"
+                          f"跳过：`lec plan skip {escape(course)}`。确认后再运行 `lec run {escape(course)}` 接着处理")
             return
     if not processed:
         console.print("所有讲都已处理完成")
@@ -464,6 +468,7 @@ def review(
 ) -> None:
     """生成或更新这门课的总复习讲义：按章节调用模型，内容没变的章节不重新生成。"""
     from .books import export_course
+    from .locks import hold, memory_lock
     from .pipeline.materials import ensure_mapped
     from .pipeline.review import generate_review, plan_review, review_context
 
@@ -478,13 +483,18 @@ def review(
         needed = [p for p in planned if p.needed]
         if not needed:
             if remapped:
-                export_course(library, cfg.data_dir, target)
+                with hold(memory_lock(cfg.data_dir, target.id),
+                          on_wait=lambda: progress("等这门课的其他操作结束后导出…")):
+                    export_course(library, cfg.data_dir, target)
             note = "，已按课程资料更新星级并重新导出" if remapped else ""
             console.print(f"复习讲义已是最新，不需要重新生成{note}（要全部重写请加 --all）")
             return
-        console.print(f"将调用模型生成 {len(needed)} 章（共 {len(planned)} 章）：" + "、".join(p.input.chapter for p in needed))
+        console.print(f"将调用模型生成 {len(needed)} 章（共 {len(planned)} 章）："
+                      + "、".join(escape(p.input.chapter) for p in needed))
         generate_review(review_context(cfg, library, progress, model), target, planned)
-        export_course(library, cfg.data_dir, target)
+        with hold(memory_lock(cfg.data_dir, target.id),
+                  on_wait=lambda: progress("等这门课的其他操作结束后导出…")):
+            export_course(library, cfg.data_dir, target)
     console.print("[green]完成[/green]：在书架上打开这门课的「总复习」，或查看导出的 总复习.md")
 
 
