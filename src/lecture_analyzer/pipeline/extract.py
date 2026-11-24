@@ -133,6 +133,8 @@ def extract_lecture(
     windows = plan_windows([len(line) + 1 for line in lines], starts, len(system) + len(slides), provider.profile)
     notes: list[LectureNotes] = []
     usage = Usage()
+    used_profile = provider.profile
+    fallback_used = False
     for number, window in enumerate(windows, start=1):
         ask = f"请按要求输出本讲的结构化笔记，笔记正文用{settings.note_language_name}。"
         if len(windows) > 1:
@@ -142,10 +144,15 @@ def extract_lecture(
         result = provider.generate_structured(parts, LectureNotes, system=system, effort=effort)
         notes.append(result.output)
         usage = usage + result.usage
+        if result.fallback_used and result.used_profile is not None:
+            used_profile = result.used_profile
+            fallback_used = True
     merged = chinese_only(merge_notes(notes))
     if not digests:
         merged.signals = [signal for signal in merged.signals if signal.type not in SLIDE_SIGNALS]
-    return ExtractResult(merged, usage, provider.profile.model, windows=len(windows))
+    return ExtractResult(
+        merged, usage, used_profile.model, used_profile=used_profile, fallback_used=fallback_used, windows=len(windows)
+    )
 
 
 def chinese_only(notes: LectureNotes) -> LectureNotes:

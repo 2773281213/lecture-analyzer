@@ -30,7 +30,7 @@ def create_provider(profile: ModelProfile) -> LLMProvider:
         return provider
     from .fallback import FallbackProvider  # 延迟导入：多数档案没有备用
 
-    return FallbackProvider(provider, create_provider(fallback))
+    return FallbackProvider(provider, lambda: create_provider(fallback))
 
 
 def _build(profile: ModelProfile) -> LLMProvider:

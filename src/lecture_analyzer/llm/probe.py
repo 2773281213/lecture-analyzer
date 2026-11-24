@@ -16,11 +16,13 @@ def short_error(exc: Exception, limit: int = 200) -> str:
 def ping(profile: ModelProfile) -> tuple[bool, str]:
     """返回（是否可用，说明）；说明里只有耗时、用量或错误信息，不含密钥。"""
     started = time.perf_counter()
+    # 只测试当前档案本身，不触发拒答轮换到备用档案
+    direct = profile.model_copy(update={"fallback_profile": None})
     try:
-        result = create_provider(profile).generate_text(
+        result = create_provider(direct).generate_text(
             [TextPart("请只回复：OK")],
-            effort="low" if profile.supports_effort else None,
-            max_tokens=min(profile.max_output, 2048),
+            effort="low" if direct.supports_effort else None,
+            max_tokens=min(direct.max_output, 2048),
         )
     except Exception as exc:  # noqa: BLE001 —— 各家 SDK 的异常类型不同，统一转成说明
         return False, short_error(exc)

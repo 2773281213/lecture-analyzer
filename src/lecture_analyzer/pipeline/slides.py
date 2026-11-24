@@ -16,7 +16,7 @@ from typing import Sequence
 from ..asr.base import Segment
 from ..course import CourseSettings
 from ..library import Course, Library, PageRef
-from ..llm import LLMProvider, TextPart, Usage
+from ..llm import LLMProvider, ModelProfile, TextPart, Usage
 from ..llm.base import Effort
 from ..materials import PAGE_KINDS, Material, MaterialStore
 from ..prompts import load_prompt
@@ -45,6 +45,8 @@ class MatchResult:
     note: str
     usage: Usage
     dropped_files: int = 0  # 超出预算、按术语筛掉的文件数
+    used_profile: ModelProfile | None = None
+    fallback_used: bool = False
 
 
 def match_files(store: MaterialStore, course: Course) -> list[MatchFile]:
@@ -117,7 +119,10 @@ def match_lecture(
     ]
     result = provider.generate_structured(parts, SlideMatch, system=system, effort=effort)
     refs = resolve_ranges(result.output.ranges, chosen)
-    return MatchResult(refs, result.output.note.strip(), result.usage, dropped_files=len(files) - len(chosen))
+    return MatchResult(
+        refs, result.output.note.strip(), result.usage, dropped_files=len(files) - len(chosen),
+        used_profile=result.used_profile, fallback_used=result.fallback_used,
+    )
 
 
 def resolve_ranges(ranges: Sequence[PageRange], files: Sequence[MatchFile]) -> list[PageRef]:

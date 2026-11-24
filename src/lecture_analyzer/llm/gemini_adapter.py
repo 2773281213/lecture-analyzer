@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
+import httpx
+import httpx2
 from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel
@@ -21,7 +23,11 @@ from .base import (
     TextPart,
     Usage,
     looks_content_blocked,
+    retry_transient,
 )
+
+# 与 Anthropic / OpenAI 适配器统一：网络断线与服务端繁忙只由 retry_transient 做一层重试
+TRANSIENT_ERRORS = (httpx.TransportError, httpx2.TransportError)
 
 # 统一的 effort 档位映射到 Gemini 的思考级别（仅在档案声明 supports_effort 时发送）
 _THINKING_LEVEL = {
@@ -49,6 +55,7 @@ class GeminiProvider(LLMProvider):
         http_options = types.HttpOptions(
             base_url=profile.resolved_base_url(),
             timeout=int(profile.timeout_s * 1000),
+            retry_options=types.HttpRetryOptions(attempts=1),  # 关闭 SDK 自带重试，统一由 retry_transient 处理
         )
         self._client = client or genai.Client(api_key=profile.required_api_key(), http_options=http_options)
 
@@ -71,10 +78,14 @@ class GeminiProvider(LLMProvider):
             config["thinking_config"] = types.ThinkingConfig(thinking_level=_THINKING_LEVEL[effort])
 
         try:
-            response = self._client.models.generate_content(
-                model=self.profile.model,
-                contents=[_to_part(p) for p in parts],
-                config=types.GenerateContentConfig(**config),
+            response = retry_transient(
+                lambda: self._client.models.generate_content(
+                    model=self.profile.model,
+                    contents=[_to_part(p) for p in parts],
+                    config=types.GenerateContentConfig(**config),
+                ),
+                TRANSIENT_ERRORS,
+                self.profile.name,
             )
         except errors.APIError as exc:
             detail = str(exc)

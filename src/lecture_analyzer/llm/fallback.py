@@ -14,6 +14,7 @@ Anthropic 有服务端的拒答回退（请求里带 fallbacks，由服务端换
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Sequence, TypeVar
 
 from pydantic import BaseModel
@@ -26,10 +27,19 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 class FallbackProvider(LLMProvider):
     """先问主模型；被拒答就换备用档案重跑，用量按两家之和记账，结果里带实际作答的档案。"""
 
-    def __init__(self, primary: LLMProvider, fallback: LLMProvider) -> None:
+    def __init__(self, primary: LLMProvider, fallback: LLMProvider | Callable[[], LLMProvider]) -> None:
         self.primary = primary
-        self.fallback = fallback
+        # 延迟初始化备用适配器：备用档案未填密钥时不影响主模型正常使用
+        self._fallback: LLMProvider | None = fallback if isinstance(fallback, LLMProvider) else None
+        self._fallback_factory: Callable[[], LLMProvider] | None = None if isinstance(fallback, LLMProvider) else fallback
         super().__init__(primary.profile)  # 对外仍是主档案：能力检查、档案名、用量记账都按主档案算
+
+    @property
+    def fallback(self) -> LLMProvider:
+        if self._fallback is None:
+            assert self._fallback_factory is not None
+            self._fallback = self._fallback_factory()
+        return self._fallback
 
     def generate_text(
         self,

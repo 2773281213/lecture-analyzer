@@ -236,7 +236,10 @@ def retry_transient(call: Callable[[], CallT], connection_errors: tuple[type[Bas
         try:
             return call()
         except Exception as exc:
-            if not (isinstance(exc, connection_errors) or getattr(exc, "status_code", None) in BUSY_STATUS):
+            status = getattr(exc, "status_code", None)
+            if status is None:
+                status = getattr(exc, "code", None)  # google-genai 的 APIError 用 code 表示状态码
+            if not (isinstance(exc, connection_errors) or status in BUSY_STATUS):
                 raise
             if not delays:
                 raise LLMError(

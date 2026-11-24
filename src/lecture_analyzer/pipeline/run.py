@@ -26,7 +26,7 @@ from ..config import AppConfig
 from ..exam_plans import ExamPlanStore, plan_block
 from ..knowledge import CourseMemory
 from ..library import Course, Lecture, LecturePart, Library, LibraryError, PageRef
-from ..llm import ModelProfile, Usage, create_provider
+from ..llm import ModelProfile, Usage, billed_profile, create_provider
 from ..locks import hold, lecture_lock, memory_lock
 from ..materials import PAGE_KINDS, MaterialStore
 from ..media import extract_audio, wav_duration_ms
@@ -164,10 +164,11 @@ class LectureRunner:
         profile = self.cfg.profile_for_step("match")
         result = match_lecture(create_provider(profile), files, self.library.segments(self.lecture_id),
                                self.course.settings, effort=self.cfg.effort_for_step("match"))
-        self._log("match", profile, result.usage)
+        used = billed_profile(result, profile)  # 主模型拒答时按实际作答的备用档案记账
+        self._log("match", used, result.usage)
         store.set_lecture_pages(self.lecture_id, result.refs, "auto")
         dropped = f"；目录过长，按术语筛掉了 {result.dropped_files} 份文件" if result.dropped_files else ""
-        detail = f"{describe_pages(result.refs, titles)}（{profile.model}）{dropped}；{result.note}"
+        detail = f"{describe_pages(result.refs, titles)}（{used.model}）{dropped}；{result.note}"
         return self._pages_result(result.refs, "done", detail)
 
     def _pages_result(self, refs: list[PageRef], state: str, detail: str) -> tuple[str, str]:
@@ -213,16 +214,17 @@ class LectureRunner:
             exam_plan=plan_block(ExamPlanStore(self.library).active(self.course), "extract"),
         )
         notes = result.output
+        used = billed_profile(result, profile)  # 主模型拒答时由备用档案接手，记账和记录都按实际作答的档案
         previous = self.library.notes(self.lecture_id)
-        self.library.save_notes(self.lecture_id, notes, profile.name, profile.model, refs)
-        self._log("extract", profile, result.usage)
+        self.library.save_notes(self.lecture_id, notes, used.name, used.model, refs)
+        self._log("extract", used, result.usage)
         title = self.lecture.title
         # 标题是空的，或者就是上次笔记生成的（没手动改过）：跟着新笔记更新，例如改了笔记语言之后
         if not title or (previous is not None and title == previous.title):
             self.library.update_lecture(self.lecture_id, title=notes.title)
         windows = f"，分 {result.windows} 段整理" if result.windows > 1 else ""
         return "done", (f"{len(notes.knowledge_points)} 个知识点、{len(notes.signals)} 个考点信号"
-                        f"（{profile.model}{windows}）")
+                        f"（{used.model}{windows}）")
 
     def _step_validate(self) -> tuple[str, str]:
         notes = self.library.notes(self.lecture_id)

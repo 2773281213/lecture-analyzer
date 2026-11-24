@@ -76,10 +76,11 @@ class OpenAICompatProvider(LLMProvider):
     ) -> tuple[str, Usage]:
         kwargs = self._request_kwargs(parts, system, schema, effort, max_tokens)
         completion = self._request(kwargs)
-        if not completion.choices:  # 中转站或上游偶发返回空结果（已实测），重试一次
-            completion = self._request(kwargs)
-
         usage = _to_usage(completion)
+        if not completion.choices:  # 中转站或上游偶发返回空结果（已实测），重试一次并累计两次用量
+            completion = self._request(kwargs)
+            usage = usage + _to_usage(completion)
+
         if not completion.choices:
             detail = getattr(completion, "model_extra", None) or {}
             raise EmptyResponseError(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from typing import Any, Sequence
+from urllib.parse import urlsplit
 
 import anthropic
 import httpx2
@@ -93,7 +94,9 @@ class AnthropicProvider(LLMProvider):
         if not self.profile.options.get("refusal_fallback", True):
             return False
         base_url = self.profile.resolved_base_url()
-        return base_url is None or OFFICIAL_HOST in base_url
+        if base_url is None:
+            return True
+        return (urlsplit(base_url).hostname or "").lower() == OFFICIAL_HOST
 
 
 def _fallback_hint(profile: ModelProfile) -> str:
