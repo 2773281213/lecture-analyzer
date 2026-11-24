@@ -6,11 +6,12 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-import numpy as np
+from typing import TYPE_CHECKING, Any
 
 from .funasr_backend import MAX_SEGMENT_MS, VAD_MODEL, load_automodel
+
+if TYPE_CHECKING:
+    import numpy as np
 
 MIN_SEGMENT_MS = 400  # 更短的片段多半是咳嗽、"嗯"之类，识别出来也是噪声
 

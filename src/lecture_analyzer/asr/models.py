@@ -129,8 +129,15 @@ def _snapshot(repo: str) -> None:
     snapshot_download(repo, revision=REVISION)
 
 
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size if path.is_file() else 0
+    except OSError:  # 下载线程并发重命名或清理临时文件时忽略
+        return 0
+
+
 def _progress_text(folder: Path, expected_mb: int) -> str:
-    done_mb = sum(path.stat().st_size for path in folder.rglob("*") if path.is_file()) / 1e6 if folder.is_dir() else 0
+    done_mb = sum(_file_size(path) for path in folder.rglob("*")) / 1e6 if folder.is_dir() else 0
     if not expected_mb:
         return f"已下载 {done_mb:.0f} MB"
     percent = min(99, int(done_mb * 100 / expected_mb))  # 大小只是估计，下载完成前最多显示 99%

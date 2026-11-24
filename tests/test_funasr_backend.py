@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from lecture_analyzer.asr import ASRError, create_backend
@@ -23,6 +22,7 @@ def test_usable_hotwords_keeps_chinese_terms_only():
 
 
 def test_read_wav_float32(tmp_path: Path):
+    np = pytest.importorskip("numpy")
     wav = tmp_path / "a.wav"
     run_ffmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "16000", "-ac", "1", str(wav)])
     audio = read_wav_float32(wav)
@@ -30,6 +30,7 @@ def test_read_wav_float32(tmp_path: Path):
 
 
 def test_read_wav_rejects_wrong_rate(tmp_path: Path):
+    pytest.importorskip("numpy")
     wav = tmp_path / "b.wav"
     run_ffmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "44100", "-ac", "1", str(wav)])
     with pytest.raises(ASRError, match="16kHz"):
@@ -46,6 +47,7 @@ class FakeAutoModel:
 
 
 def test_transcribe_passes_hotwords_and_collects_sentences(tmp_path: Path):
+    pytest.importorskip("numpy")
     wav = tmp_path / "c.wav"
     run_ffmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "16000", "-ac", "1", str(wav)])
     backend = FunASRBackend("paraformer", device="cpu")
@@ -57,6 +59,7 @@ def test_transcribe_passes_hotwords_and_collects_sentences(tmp_path: Path):
 
 
 def test_sensevoice_ignores_hotwords_and_passes_language(tmp_path: Path):
+    pytest.importorskip("numpy")
     wav = tmp_path / "d.wav"
     run_ffmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "16000", "-ac", "1", str(wav)])
     backend = FunASRBackend("sensevoice", device="cpu", language="ko")
@@ -67,6 +70,7 @@ def test_sensevoice_ignores_hotwords_and_passes_language(tmp_path: Path):
 
 
 def test_paraformer_never_gets_language(tmp_path: Path):
+    pytest.importorskip("numpy")
     wav = tmp_path / "e.wav"
     run_ffmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "16000", "-ac", "1", str(wav)])
     backend = FunASRBackend("paraformer", device="cpu", language="ko")

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from lecture_analyzer.asr import ASRError, create_backend
@@ -76,6 +75,8 @@ def two_second_wav(tmp_path: Path) -> Path:
 
 
 def test_segments_keep_vad_times_and_language(two_second_wav: Path):
+    pytest.importorskip("numpy")
+    pytest.importorskip("torch")
     outputs = [
         {"language": "Korean", "transcription": "바이러스 명칭을 정할 때"},
         {"language": "Chinese", "transcription": "给病毒命名的时候"},
@@ -93,6 +94,8 @@ def test_segments_keep_vad_times_and_language(two_second_wav: Path):
 
 
 def test_forced_language_is_used_for_all_segments(two_second_wav: Path):
+    pytest.importorskip("numpy")
+    pytest.importorskip("torch")
     backend, processor = _backend([(0, 900)], [{"language": None, "transcription": "안녕하세요"}], language="ko")
     assert backend.transcribe(two_second_wav)[0].lang == "ko"
     assert processor.requests[0]["language"] == "ko" and processor.requests[0]["prompt"] is None
@@ -104,7 +107,7 @@ def test_unknown_size_rejected():
 
 
 def test_resolve_model_dir_by_hub(monkeypatch):
-    import modelscope
+    modelscope = pytest.importorskip("modelscope")
 
     monkeypatch.setattr(modelscope, "snapshot_download", lambda model_id: f"D:/cache/{model_id}")
     assert resolve_model_dir("Qwen/Qwen3-ASR-0.6B-hf", "modelscope") == "D:/cache/Qwen/Qwen3-ASR-0.6B-hf"
@@ -114,6 +117,7 @@ def test_resolve_model_dir_by_hub(monkeypatch):
 
 
 def test_vad_filters_short_spans():
+    np = pytest.importorskip("numpy")
     vad = VadSegmenter("cpu")
 
     class FakeVadModel:

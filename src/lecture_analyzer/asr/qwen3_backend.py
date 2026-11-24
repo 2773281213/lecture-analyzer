@@ -120,8 +120,13 @@ def _language_table() -> dict[str, str]:
     """Qwen3-ASR 能强制的语种：代码 → 名称（模型识别结果里输出的是名称）。"""
     try:
         from transformers.models.qwen3_asr.processing_qwen3_asr import LANGUAGE_CODE_TO_NAME
-    except ImportError:
-        return {"zh": "Chinese", "ko": "Korean", "en": "English"}
+    except ImportError:  # 未安装 transformers（--extra asr）时内置常用语种兜底表
+        return {
+            "zh": "Chinese", "yue": "Cantonese", "en": "English", "ko": "Korean", "ja": "Japanese",
+            "fr": "French", "de": "German", "es": "Spanish", "pt": "Portuguese", "it": "Italian",
+            "ru": "Russian", "ar": "Arabic", "th": "Thai", "vi": "Vietnamese", "id": "Indonesian",
+            "ms": "Malay", "tr": "Turkish", "nl": "Dutch", "pl": "Polish", "sv": "Swedish", "hi": "Hindi",
+        }
     return dict(LANGUAGE_CODE_TO_NAME)
 
 

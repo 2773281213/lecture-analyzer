@@ -6,12 +6,13 @@ import re
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
-
-import numpy as np
+from typing import TYPE_CHECKING, Any, Sequence
 
 from ..media import SAMPLE_RATE
 from .base import ASRBackend, ASRError, Segment, free_gpu_memory
+
+if TYPE_CHECKING:
+    import numpy as np
 
 MAX_SEGMENT_MS = 30_000  # VAD 单段最长 30 秒
 VAD_MODEL = "fsmn-vad"  # 语音活动检测模型（FunASR 简称），Qwen3-ASR 切句也用它
@@ -116,6 +117,10 @@ def read_wav_float32(path: Path) -> np.ndarray:
 
     直接传数组给 FunASR，避开 torchaudio 的文件加载（新版 torchaudio 需要额外安装 torchcodec）。
     """
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise ASRError("没有安装本地语音识别依赖，请先运行：uv sync --extra asr") from exc
     with wave.open(str(path), "rb") as audio:
         if audio.getsampwidth() != 2 or audio.getnchannels() != 1 or audio.getframerate() != SAMPLE_RATE:
             raise ASRError(f"需要 16kHz 单声道 16 bit wav，请先用 media.extract_audio 转换：{path}")

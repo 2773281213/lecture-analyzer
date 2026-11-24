@@ -102,8 +102,10 @@ def resolve_device(device: str) -> str:
     """auto：有可用的 NVIDIA 显卡就用 cuda:0，否则用 CPU（很慢，界面会提示改用大模型转写）。"""
     if device != "auto":
         return device
-    import torch
-
+    try:
+        import torch
+    except ImportError:  # 未安装本地语音识别依赖（--extra asr）时视为无显卡
+        return "cpu"
     return "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
