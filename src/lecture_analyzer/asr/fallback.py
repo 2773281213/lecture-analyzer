@@ -9,18 +9,22 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 
-from ..config import AppConfig
+from ..config import AppConfig, ConfigError
 from ..course import CourseSettings
 from ..media import extract_audio
 from ..timecode import format_ms
 from . import create_backend, local_spec
 from .base import ASRBackend, Segment
 
+if TYPE_CHECKING:
+    from ..llm import ModelProfile, Usage
+
 
 def fill_skipped(
-    cfg: AppConfig, settings: CourseSettings, wav: Path, skipped: Sequence[tuple[int, int]], work_dir: Path
+    cfg: AppConfig, settings: CourseSettings, wav: Path, skipped: Sequence[tuple[int, int]], work_dir: Path,
+    on_usage: Callable[[ModelProfile, Usage], None] | None = None,
 ) -> tuple[list[Segment], str]:
     """用本地模型补转缺失的区间（毫秒），返回（补出的句子，处理说明）。"""
     ranges = "、".join(f"{format_ms(start)}–{format_ms(end)}" for start, end in skipped)
@@ -29,8 +33,9 @@ def fill_skipped(
     spec = local_spec(settings) if cfg.asr.fallback == "auto" else cfg.asr.fallback
     try:
         with closing(create_backend(cfg, spec, work_dir=work_dir, settings=settings)) as backend:
+            backend.on_usage = on_usage  # 大模型补转（llm:档案）逐次记账；本地模型没有请求，不会回调
             filled = [seg for span in skipped for seg in _transcribe_span(backend, wav, span, work_dir)]
-    except RuntimeError as exc:  # ASRError、MediaError、显存不足等都是 RuntimeError；代码缺陷类异常照常抛出
+    except (RuntimeError, ConfigError) as exc:  # ASRError、MediaError、显存不足，以及方案里写错的档案名；代码缺陷照常抛出
         return [], f"{ranges} 被上游拦截，本地补转失败：{exc}"
     return filled, f"{ranges} 被上游拦截，已用 {backend.name} 补转 {len(filled)} 句"
 

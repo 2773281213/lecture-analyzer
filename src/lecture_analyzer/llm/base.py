@@ -258,12 +258,30 @@ def schema_instruction(schema: type[BaseModel]) -> str:
     )
 
 
+_OBJECT_START = re.compile(r'\{[ \t\r\n]*"')  # JSON 对象开头：{ 后（可有空白）紧跟键名；说明文字里的 {1}、{完成} 不算
+_DECODER = json.JSONDecoder()
+
+
 def extract_json_text(text: str) -> str:
-    """取出模型输出中的 JSON 对象文本，兼容 ```json 代码块和前后多余文字。"""
+    """取出模型输出中的 JSON 对象文本，兼容 ```json 代码块和前后多余文字（含前后文字里的花括号）。
+
+    从第一个像对象开头的位置完整解析一个对象；解析不了（多半是输出被截断）时退回“第一个 { 到最后一个 }”，
+    让校验照常报出截断位置，修正提示与重试不变。
+    不逐个 `{` 位置循环尝试、也不优先取 ```json 代码块：合法输出正文里含 "```json\\n{}\\n```" 时会被误判成内层对象，
+    深层嵌套还会抛 RecursionError 绕过重试。
+    """
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end <= start:
         raise ValueError("输出中找不到 JSON 对象")
+    match = _OBJECT_START.search(text, start)
+    if match is not None:
+        try:
+            _, stop = _DECODER.raw_decode(text, match.start())
+        except (ValueError, RecursionError):  # 截断、不合法，或嵌套过深（json 扫描器抛 RecursionError）
+            pass
+        else:
+            return text[match.start() : stop]
     return text[start : end + 1]
 
 

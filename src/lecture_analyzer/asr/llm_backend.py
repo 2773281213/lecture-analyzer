@@ -21,7 +21,9 @@ from typing import Sequence
 from pydantic import BaseModel, Field
 
 from ..course import CourseSettings
-from ..llm import AudioPart, EmptyResponseError, LLMProvider, ModelProfile, StructuredOutputError, TextPart, Usage
+from ..llm import (
+    AudioPart, EmptyResponseError, LLMProvider, ModelProfile, StructuredOutputError, TextPart, Usage, billed_profile,
+)
 from ..media import encode_mp3, halve_wav, split_wav, wav_duration_ms
 from ..prompts import load_prompt
 from ..timecode import parse_timecode
@@ -76,9 +78,12 @@ class LLMTranscriber(ASRBackend):
             total = total + usage
         return total
 
-    def _add_usage(self, provider: LLMProvider, usage: Usage) -> None:
-        profile, previous = self.usage_by_model.get(provider.profile.model, (provider.profile, Usage()))
-        self.usage_by_model[provider.profile.model] = (profile, previous + usage)
+    def _add_usage(self, profile: ModelProfile, usage: Usage) -> None:
+        """记一次请求的用量：按型号聚合进 usage_by_model，并立即回调 on_usage（若有），让调用方逐次记账。"""
+        _, previous = self.usage_by_model.get(profile.model, (profile, Usage()))
+        self.usage_by_model[profile.model] = (profile, previous + usage)
+        if self.on_usage is not None and usage != Usage():  # 内容审核拦截等 0 用量不记
+            self.on_usage(profile, usage)
 
     def transcribe(self, wav: Path, hotwords: Sequence[str] = ()) -> list[Segment]:
         self.skipped = []
@@ -112,7 +117,7 @@ class LLMTranscriber(ASRBackend):
             try:
                 lines = self._request(provider, piece)
             except (EmptyResponseError, StructuredOutputError) as exc:  # 被拦截，或输出两次都在中途被截断
-                self._add_usage(provider, exc.usage)
+                self._add_usage(provider.profile, exc.usage)
                 continue
             if unusable(lines, self._source_languages):
                 continue
@@ -136,7 +141,7 @@ class LLMTranscriber(ASRBackend):
             [AudioPart(mp3.read_bytes(), "audio/mp3"), TextPart(self._instruction)], TranscriptChunk,
             system=self._system,
         )
-        self._add_usage(provider, result.usage)
+        self._add_usage(billed_profile(result, provider.profile), result.usage)
         return result.output.lines
 
     @property

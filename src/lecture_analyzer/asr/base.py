@@ -6,7 +6,10 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
+
+if TYPE_CHECKING:
+    from ..llm import ModelProfile, Usage
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,7 @@ class ASRError(RuntimeError):
 class ASRBackend(ABC):
     name: str = ""
     progress: Callable[[str], None] | None = None  # 转写进度（如"第 3/18 片"），由调用方设置
+    on_usage: Callable[[ModelProfile, Usage], None] | None = None  # 大模型转写每次请求后的用量，由调用方记账
 
     def notify(self, message: str) -> None:
         if self.progress is not None:

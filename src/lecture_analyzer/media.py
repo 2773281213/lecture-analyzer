@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 import wave
 from pathlib import Path
@@ -41,18 +42,27 @@ def extract_audio(
     """从视频或音频中抽出单声道 16 bit PCM wav；start/max 用于只截取一段做试验。"""
     if not src.is_file():
         raise MediaError(f"找不到文件：{src}")
-    dst.parent.mkdir(parents=True, exist_ok=True)
     seek = ["-ss", f"{start_seconds:g}"] if start_seconds else []  # 放在 -i 前面：快速定位
     limit = ["-t", f"{max_seconds:g}"] if max_seconds else []
     pcm = ["-vn", "-ac", "1", "-ar", str(sample_rate), "-c:a", "pcm_s16le"]
-    run_ffmpeg([*seek, "-i", str(src), *limit, *pcm, str(dst)])
-    return dst
+    return _ffmpeg_to(dst, [*seek, "-i", str(src), *limit, *pcm])
 
 
 def encode_mp3(src: Path, dst: Path, bitrate: str = "64k") -> Path:
     """转成单声道 mp3（10 分钟约 5MB），用于发给云端模型；Gemini 原生接口和 OpenAI 兼容接口都支持。"""
+    return _ffmpeg_to(dst, ["-i", str(src), "-ac", "1", "-c:a", "libmp3lame", "-b:a", bitrate])
+
+
+def _ffmpeg_to(dst: Path, args: list[str]) -> Path:
+    """ffmpeg 先写到同目录的固定临时名，成功后再换成目标文件：进程被强杀时不会留下会被当成完整结果复用的半截文件。
+    临时名固定且保留扩展名（ffmpeg 按扩展名选封装；强杀时 finally 不执行，下次会被 -y 覆盖），不要用 mkstemp。"""
     dst.parent.mkdir(parents=True, exist_ok=True)
-    run_ffmpeg(["-i", str(src), "-ac", "1", "-c:a", "libmp3lame", "-b:a", bitrate, str(dst)])
+    partial = dst.with_name(f"{dst.stem}.partial{dst.suffix}")
+    try:
+        run_ffmpeg([*args, str(partial)])
+        os.replace(partial, dst)
+    finally:
+        partial.unlink(missing_ok=True)
     return dst
 
 

@@ -186,6 +186,9 @@ class LectureRunner:
         spec = resolve_spec(self.cfg, self.options.asr or self.course.asr, self.course.settings)
         download_models(self.cfg, spec, self.report)  # 本地方案第一次使用时先下载模型（显示进度）
         backend = create_backend(self.cfg, spec, work_dir=asr_dir, settings=self.course.settings)
+        # 大模型转写每请求一次就记一次账：中途失败、任务被暂停或取消（进程被结束）时已花的用量也不丢，
+        # 重跑时已缓存的片段不再请求、也不再计费
+        backend.on_usage = lambda profile, usage: self._log("transcribe", profile, usage)
         segments: list[Segment] = []
         notes: list[str] = []
         try:
@@ -195,8 +198,6 @@ class LectureRunner:
                 notes += [note] if note else []
         finally:
             backend.close()
-        for profile, usage in getattr(backend, "usage_by_model", {}).values():  # 大模型转写按型号记录用量
-            self._log("transcribe", profile, usage)
         self.library.replace_segments(self.lecture_id, segments)
         detail = "".join(f"；{note}" for note in notes) + _gap_warning(segments, lecture.duration_ms)
         return "done", f"{len(segments)} 句（{backend.name}）{detail}"
@@ -284,7 +285,8 @@ class LectureRunner:
             return segments, ""
         # 被上游拦截的片段，用本地模型补转
         fallback_dir = asr_dir / f"part-{part.part}-fallback"
-        filled, message = fill_skipped(self.cfg, self.course.settings, wav, skipped, fallback_dir)
+        filled, message = fill_skipped(self.cfg, self.course.settings, wav, skipped, fallback_dir,
+                                       on_usage=backend.on_usage)
         return sorted([*segments, *filled], key=lambda s: s.start_ms), prefix + message
 
     def _refresh_part_cache(self, asr_dir: Path, part: LecturePart, hotwords: Sequence[str]) -> None:
