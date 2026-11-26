@@ -26,7 +26,7 @@ from xml.etree import ElementTree
 
 import pymupdf
 
-from .documents import iter_pages, pixmap_to_png, read_text_any
+from .documents import iter_pages, pixmap_to_png, read_text_any, render_page_png
 from .library import LibraryError
 
 Report = Callable[[str], None]
@@ -48,6 +48,7 @@ MAX_PAGES = 12
 MAX_TEXT_CHARS = 20_000  # 所有附件合计展开的文字上限（留出课程证据的预算）
 MAX_IMAGE_PAGES = 8  # 所有附件合计送给模型的页面图片上限
 MAX_IMAGE_SIDE = 1600
+MAX_XML_BYTES = 20 * 1024 * 1024  # Office 压缩包里的单个 XML 解压后的上限
 TOKEN = re.compile(r"^[0-9a-f]{24}$")
 _W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -301,9 +302,12 @@ def _read_pdf(item: StoredAttachment, text_budget: int, image_budget: int) -> At
                     remaining = max(remaining - len(fitted), 0)
                 truncated = truncated or cut
             # 扫描页没有文字；文字很少或页面里有图片时也把页面渲染图一起给模型，公式、表格不会丢
-            if len(images) < image_budget and (not text or len(text) < 160 or
-                                               (page.get_images(full=False) and len(text) < 600)):
-                images.append((page_no, _page_png(page)))
+            want_image = not text or len(text) < 160 or (page.get_images(full=False) and len(text) < 600)
+            if want_image:
+                if len(images) < image_budget:
+                    images.append((page_no, _page_png(page)))
+                else:
+                    truncated = True
         page_count = max(total, 1)
     if not images and not has_text and total == 0:
         raise AttachmentError(f"PDF「{item.name}」没有页面")
@@ -312,7 +316,7 @@ def _read_pdf(item: StoredAttachment, text_budget: int, image_budget: int) -> At
 
 def _read_docx(item: StoredAttachment, text_budget: int) -> AttachmentContent:
     with zipfile.ZipFile(item.path) as archive:
-        xml = archive.read("word/document.xml")
+        xml = _read_xml_member(archive, "word/document.xml", item.name)
     root = ElementTree.fromstring(xml)
     paragraphs = []
     for paragraph in root.iter(f"{_W_NS}p"):
@@ -333,7 +337,7 @@ def _read_pptx(item: StoredAttachment, text_budget: int) -> AttachmentContent:
         has_text = False
         truncated = len(names) > MAX_PAGES
         for page_no, name in enumerate(names[:MAX_PAGES], start=1):
-            root = ElementTree.fromstring(archive.read(name))
+            root = ElementTree.fromstring(_read_xml_member(archive, name, item.name))
             text = "\n".join(node.text or "" for node in root.iter(f"{_A_NS}t")).strip()
             if not text:
                 continue
@@ -368,9 +372,22 @@ def _read_legacy_office(item: StoredAttachment, work: Path, text_budget: int,
                 lines.append(fitted)
                 remaining = max(remaining - len(fitted), 0)
             truncated = truncated or cut
-        if page.image_png and len(images) < image_budget and (not text or len(text) < 160):
-            images.append((page.page_no, page.image_png))
+        if page.image_png and (not text or len(text) < 160):
+            if len(images) < image_budget:
+                images.append((page.page_no, page.image_png))
+            else:
+                truncated = True
     return AttachmentContent(item, "\n\n".join(lines), max(page_count, 1), images, has_text, truncated)
+
+
+def _read_xml_member(archive: zipfile.ZipFile, name: str, attachment_name: str) -> bytes:
+    """读 Office 压缩包里的一个 XML；先按中央目录声明的解压大小拦截，避免高压缩比的 XML 撑爆内存。"""
+    info = archive.getinfo(name)
+    if info.file_size > MAX_XML_BYTES:  # 在函数体内读模块常量，测试可以 monkeypatch
+        raise AttachmentError(
+            f"附件「{attachment_name}」内容过大（解压后超过 {human_size(MAX_XML_BYTES)}），请另存为 PDF 后再上传"
+        )
+    return archive.read(info)  # 读出的字节不会超过声明的 file_size；伪造小值会因 CRC 不符抛 BadZipFile
 
 
 def _clean_name(raw_name: str) -> str:
@@ -393,7 +410,7 @@ def _fit_text(text: str, budget: int) -> tuple[str, bool]:
 
 
 def _page_png(page: pymupdf.Page) -> bytes:
-    return pixmap_to_png(page.get_pixmap(dpi=110), MAX_IMAGE_SIDE)
+    return render_page_png(page, 110, MAX_IMAGE_SIDE)
 
 
 def _image_file_png(path: Path) -> bytes:

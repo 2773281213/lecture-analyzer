@@ -76,7 +76,7 @@ def iter_pages(path: Path, work_dir: Path, dpi: int = 110, max_image_side: int =
             yield DocPage(
                 page_no=page_no,
                 text=page.get_text("text").strip(),
-                image_png=page.get_pixmap(dpi=dpi).tobytes("png"),
+                image_png=render_page_png(page, dpi, max_image_side),
                 has_images=bool(page.get_images(full=False)),
             )
 
@@ -212,6 +212,13 @@ def _word_to_pdf(src: Path, out: Path) -> None:
     finally:
         if app.Documents.Count == 0:
             app.Quit()
+
+
+def render_page_png(page: pymupdf.Page, dpi: int, max_side: int) -> bytes:
+    """按 dpi 渲染页面；长边会超过 max_side 时先降低缩放再渲染，避免先渲染超大图再缩小。"""
+    longest = max(page.rect.width, page.rect.height, 1)
+    zoom = min(dpi / 72, max_side / longest)
+    return pixmap_to_png(page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom)), max_side)
 
 
 def pixmap_to_png(pix: pymupdf.Pixmap, max_side: int) -> bytes:
