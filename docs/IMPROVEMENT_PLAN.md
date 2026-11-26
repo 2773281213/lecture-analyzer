@@ -158,7 +158,7 @@
 
 4. **Markdown / 文本清理代码段保护与 Web 安全边界**（`6ecb38a`、`9cf38c6`、`6dce815`、`1a3c3f0`）
    - `src/lecture_analyzer/textnorm.py`、`src/lecture_analyzer/web/rendering.py`：
-     - 在 `textnorm.py` 中统一提供 `CODE`、`MATH` 与 `split_code`，由 `textnorm._strip_asides` 与 `web/rendering.render_markdown` 共用；
+     - 在 `textnorm.py` 中统一提供 `MATH` 与 `split_code`（内部用 `_INLINE_CODE` 切出行内代码），由 `textnorm._strip_asides` 与 `web/rendering.render_markdown` 共用；
      - 围栏识别符合 CommonMark（兼容 CRLF、反引号信息串不含反引号、结束围栏长度允许不短于开栏且行尾仅有空白），`split_code` 改为逆序预统计后续结束围栏最大长度的线性逐行扫描，对大量未闭合开栏行保持 O(n) 复杂度，围栏之外再用 `_INLINE_CODE` 切出行内代码；
      - `strip_foreign_asides` / `strip_citations` 不再破坏围栏代码块里的函数参数或受孤立 `$` 跨反引号影响；
      - `render_markdown` 改用每次调用随机 8 位十六进制 `nonce` 占位符（不含 `:` 等行内终止符以保性能），`_fix_leftover_bold` 跳过 HTML 标签属性与 `<code>` 内文本。

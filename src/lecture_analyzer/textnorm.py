@@ -18,16 +18,10 @@ def normalize_zh(text: str) -> str:
     return "".join(ch for ch in text if not unicodedata.category(ch).startswith(_DROP_CATEGORIES))
 
 
-# 围栏代码块（列表里缩进的也算；反引号围栏的信息串不能含反引号、结束围栏长度不短于开栏且后面只有空白）|
-# 行内代码（内容不含反引号，两端反引号串长度相等）。
-# CODE 保留作兼容与参考；split_code 改用下方的线性逐行扫描切分围栏，避免大量未闭合开栏行触发平方级回溯。
-# 也不要把代码和公式合进同一个 alternation，否则正文里孤立的 $ 会吞进后续行内代码里的 $，把代码切碎。
-CODE = re.compile(
-    r"^[ \t]*(`{3,}+)[^`\n]*\r?\n.*?^[ \t]*\1`*+[ \t]*\r?$"
-    r"|^[ \t]*(~{3,}+)[^\n]*\r?\n.*?^[ \t]*\2~*+[ \t]*\r?$"
-    r"|(?<!`)(`++)[^`\n]+?\3(?!`)",
-    re.S | re.M,
-)
+# 代码段切分由 split_code 负责：先用 _FENCE_OPEN / _FENCE_CLOSE 线性逐行扫描围栏代码块
+# （列表里缩进的也算；反引号围栏的信息串不含反引号，结束围栏同字符、长度不短于开栏且行尾仅有空白），
+# 非围栏段再用 _INLINE_CODE 切出行内代码（内容不含反引号，两端反引号串长度相等）。
+# 不要把代码和公式合进同一个 alternation，否则正文里孤立的 $ 会吞进后续行内代码里的 $，把代码切碎。
 _FENCE_OPEN = re.compile(r"^[ \t]*+(?:(`{3,}+)[^`\n]*|(~{3,}+)[^\n]*)\r?\n$")
 _FENCE_CLOSE = re.compile(r"^[ \t]*+(`{3,}+|~{3,}+)[ \t]*+\r?\n?$")
 _INLINE_CODE = re.compile(r"(?<!`)(`++)[^`\n]+?\1(?!`)")
