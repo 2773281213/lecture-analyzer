@@ -81,6 +81,16 @@ def test_foreign_asides_are_stripped():
     assert [strip_foreign_asides(text) for text in kept] == kept  # 缩写、选项、公式、代码、链接、中文括号不动
 
 
+def test_foreign_asides_keep_code_intact():
+    fenced = "```python\ndef process(data):\n    return compute(value)\n```"
+    assert strip_foreign_asides(fenced) == fenced
+    inline_with_dollar = "价格 $5 和 `foo($x) + bar(baz)` 结束"
+    assert strip_foreign_asides(inline_with_dollar) == inline_with_dollar
+    assert strip_foreign_asides("说明（english note）") == "说明"
+    assert strip_foreign_asides("$f(x)$") == "$f(x)$"
+    assert strip_foreign_asides("函数 $f(value)$ 表示（meaning）") == "函数 $f(value)$ 表示"
+
+
 def test_saved_analysis_has_no_foreign_asides(m1_env):
     notes = json.loads(json.dumps(LECTURE_NOTES, ensure_ascii=False))
     notes["title"] = "量效关系（dose-response）"

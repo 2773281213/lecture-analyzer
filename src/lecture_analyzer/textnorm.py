@@ -18,9 +18,20 @@ def normalize_zh(text: str) -> str:
     return "".join(ch for ch in text if not unicodedata.category(ch).startswith(_DROP_CATEGORIES))
 
 
+# 围栏代码块（列表里缩进的也算；反引号围栏的信息串不能含反引号、结束行除空白外不能有其他字符）|
+# 行内代码（内容不含反引号，两端反引号串长度相等）。
+# 必须用占有量词，否则一长串反引号会二次方回溯；也不要把代码和公式合进同一个 alternation，
+# 否则正文里孤立的 $ 会吞进后续行内代码里的 $，把代码切碎。
+CODE = re.compile(
+    r"^[ \t]*(`{3,}+)[^`\n]*\r?\n.*?^[ \t]*\1[ \t]*\r?$"
+    r"|^[ \t]*(~{3,}+)[^\n]*\r?\n.*?^[ \t]*\2[ \t]*\r?$"
+    r"|(?<!`)(`++)[^`\n]+?\3(?!`)",
+    re.S | re.M,
+)
+MATH = re.compile(r"\$\$.+?\$\$|\$[^$\n]+?\$", re.S)
+
 # 括号旁注：（……）或 (……)，不跨行、不嵌套；紧跟在 ] 后面的是 Markdown 链接地址，不算
 _ASIDE = re.compile(r"(?<!\])[ \t]?(?<!\])[（(]([^（）()\n]{1,80})[）)]")
-_MATH_OR_CODE = re.compile(r"(\$\$.+?\$\$|\$[^$\n]+?\$|`[^`\n]+`)", re.S)  # 公式和代码里的括号不动
 _HANGUL = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7a3]")
 _HANZI = re.compile(r"[\u4e00-\u9fff]")
 _LATIN_ONLY = re.compile(r"[A-Za-z][A-Za-z\s.,'’/&-]*")
@@ -50,10 +61,34 @@ def strip_citations(text: str, labels: Collection[str]) -> str:
     return _strip_asides(text, cited)
 
 
+def _split_pattern(pattern: re.Pattern[str], text: str) -> list[tuple[str, bool]]:
+    pieces: list[tuple[str, bool]] = []
+    last = 0
+    for match in pattern.finditer(text):
+        if match.start() > last:
+            pieces.append((text[last:match.start()], False))
+        pieces.append((match.group(0), True))
+        last = match.end()
+    if last < len(text):
+        pieces.append((text[last:], False))
+    return pieces
+
+
+def split_code(text: str) -> list[tuple[str, bool]]:
+    """按 Markdown 代码段（围栏代码块与行内代码）切分文本，返回 (片段, 是否代码段) 列表；顺序拼接等于原文。"""
+    return _split_pattern(CODE, text)
+
+
 def _strip_asides(text: str, drop: Callable[[str], bool]) -> str:
-    parts = _MATH_OR_CODE.split(text)  # 奇数位置是公式或代码
-    return "".join(part if index % 2 else _ASIDE.sub(lambda match: _strip_aside(match, drop), part)
-                   for index, part in enumerate(parts))
+    # 代码段原样保留，非代码片段里再跳过公式，只清理普通文字中的括号旁注
+    pieces: list[str] = []
+    for part, is_code in split_code(text):
+        if is_code:
+            pieces.append(part)
+            continue
+        for chunk, is_math in _split_pattern(MATH, part):
+            pieces.append(chunk if is_math else _ASIDE.sub(lambda match: _strip_aside(match, drop), chunk))
+    return "".join(pieces)
 
 
 def _strip_aside(match: re.Match[str], drop: Callable[[str], bool]) -> str:

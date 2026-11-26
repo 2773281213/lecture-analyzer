@@ -239,3 +239,17 @@ def test_docx_forged_file_size_uses_bounded_memory(tmp_path: Path):
     finally:
         tracemalloc.stop()
     assert peak < 2 * 1024 * 1024
+
+
+def test_find_tool_prefers_bundled_7zip(tmp_path: Path, monkeypatch):
+    bundled = tmp_path / "7z.exe"
+    bundled.write_bytes(b"")
+    monkeypatch.setattr(archive, "BUNDLED_7ZIP", bundled)
+    monkeypatch.setattr(archive.shutil, "which", lambda _name: "C:/old/7z.exe")
+
+    found = archive.find_tool(".7z")
+    assert found is not None and found[0] == str(bundled)
+
+    bundled.unlink()
+    fallback = archive.find_tool(".7z")
+    assert fallback is not None and fallback[0] == "C:/old/7z.exe"

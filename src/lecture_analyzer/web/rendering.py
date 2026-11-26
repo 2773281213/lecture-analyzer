@@ -10,12 +10,9 @@ from markdown_it import MarkdownIt
 from markupsafe import Markup, escape
 
 from ..pipeline.report_render import evidence_text
+from ..textnorm import MATH, split_code
 
 _MARKDOWN = MarkdownIt("commonmark", {"html": False, "breaks": True}).enable("table")
-_MATH = re.compile(r"\$\$.+?\$\$|\$[^$\n]+?\$", re.S)
-# 围栏代码块（列表里缩进的也算）| 行内代码（内容不含反引号，两端反引号串长度相等）。
-# 必须用占有量词，否则一长串反引号会二次方回溯。
-_CODE = re.compile(r"^[ \t]*(`{3,}+|~{3,}+).*?^[ \t]*\1|(?<!`)(`++)[^`\n]+?\2(?!`)", re.S | re.M)
 _OPEN, _CLOSE = chr(0xE000), chr(0xE001)  # 私用区字符
 # 占位符是私用区字符包住「每次调用随机的 nonce + 公式编号」。正文里自带同样的字符（包括 &#xE000; 这类
 # 实体经 markdown-it 解码出来的）没有这次调用的 nonce，不会被当成占位符替换。
@@ -59,12 +56,7 @@ def render_markdown(text: str | None) -> Markup:
         return match.group(0)
 
     source = text or ""
-    pieces: list[str] = []
-    last = 0
-    for match in _CODE.finditer(source):
-        pieces += [_MATH.sub(stash, source[last:match.start()]), match.group(0)]
-        last = match.end()
-    pieces.append(_MATH.sub(stash, source[last:]))
+    pieces = [part if is_code else MATH.sub(stash, part) for part, is_code in split_code(source)]
     # 先补加粗、后恢复公式：公式里的 ** 不会被当成加粗
     html = _fix_leftover_bold(_MARKDOWN.render("".join(pieces)))
     return Markup(_PLACEHOLDER.sub(restore, html))

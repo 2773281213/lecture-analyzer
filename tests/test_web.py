@@ -233,6 +233,11 @@ def test_markdown_leaves_code_and_attributes_alone():
     html = str(render_markdown("| 指标 | 公式 |\n|---|---|\n| 灵敏度 | $P(+|D)$ |"))
     assert "<td>$P(+|D)$</td>" in html
     assert "<strong>장($x$)</strong>인" in str(render_markdown("**장($x$)**인"))
+    # 行首三反引号行内代码不能被当成围栏起点，避免把后续公式吞进代码块
+    html = str(render_markdown("```foo``` and $a*b + c*d$\n\n```py\ny = 1\n```"))
+    assert "<em>" not in html and "$a*b + c*d$" in html
+    html = str(render_markdown("```a``` $x*y + z*w$\n```b```"))
+    assert "<em>" not in html and "$x*y + z*w$" in html
 
 
 def test_markdown_placeholder_cannot_collide():

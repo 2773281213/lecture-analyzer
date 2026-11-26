@@ -2,7 +2,7 @@
 
 - zip 用标准库解压。文件名有 UTF-8 标记（或 Unicode 扩展字段）时直接用；否则自动识别编码
   （GBK、CP949、Shift-JIS、Big5……），中文、韩文、日文系统打的包都能显示正确的文件名。
-- rar、7z 调用 7-Zip（安装版随附在 tools\7zip，也找本机装的）或 WinRAR（UnRAR.exe）；都没有时提示先手动解压。
+- rar、7z 调用 7-Zip（安装版随附在 tools\7zip，优先用随附的，也找本机装的）或 WinRAR（UnRAR.exe）；都没有时提示先手动解压。
 - 同一文件夹里的图片（例如拍下的几页试卷）合成一份资料；单独给出的几张图片也合成一份。
 - 安全：压缩包里的路径一律去掉盘符和 ".."，只保留在暂存目录之内；限制文件数和解压后的总大小；
   不跟随符号链接和目录联接点；有密码的压缩包直接报错，不会等待输入密码。
@@ -284,8 +284,12 @@ def _check_limits(count: int, total: int, archive: Path) -> None:
 
 def find_tool(suffix: str) -> list[str] | None:
     """返回解压这种格式的命令前缀；本机没有可用工具时返回 None。"""
-    seven_zip = _which("7z", [str(BUNDLED_7ZIP), r"C:\Program Files\7-Zip\7z.exe",
-                              r"C:\Program Files (x86)\7-Zip\7z.exe"])
+    # 优先用安装包随附的 7-Zip，避免被用户 PATH 里旧版本（25.00 之前存在符号链接漏洞）覆盖
+    seven_zip = (
+        str(BUNDLED_7ZIP)
+        if BUNDLED_7ZIP.is_file()
+        else _which("7z", [r"C:\Program Files\7-Zip\7z.exe", r"C:\Program Files (x86)\7-Zip\7z.exe"])
+    )
     if seven_zip:
         return [seven_zip, "x", "-y", "-bd"]
     if suffix == ".rar":
