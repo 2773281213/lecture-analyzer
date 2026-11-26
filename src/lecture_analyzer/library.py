@@ -175,7 +175,7 @@ class Library:
     def add_course(self, name: str, settings: CourseSettings, asr: str | None = None, instructions: str = "") -> Course:
         position = self.conn.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM course").fetchone()[0]
         try:
-            self.conn.execute(
+            cursor = self.conn.execute(
                 "INSERT INTO course (name, subject, teaching, interpreted_to, note_language, asr, instructions,"
                 " position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (name, settings.subject, settings.teaching, settings.interpreted_to, settings.note_language, asr,
@@ -183,6 +183,8 @@ class Library:
             )
         except sqlite3.IntegrityError:
             raise LibraryError(f"课程「{name}」已存在") from None
+        # SQLite 会复用删除后空出的编号：旧版本遗留的费用记录不能算到新课程头上
+        self.conn.execute("UPDATE llm_call SET course_id = NULL WHERE course_id = ?", (cursor.lastrowid,))
         self.conn.commit()
         return self.course(name)
 
@@ -265,6 +267,8 @@ class Library:
             "INSERT INTO lecture_part (lecture_id, part, media_path) VALUES (?, ?, ?)",
             [(cursor.lastrowid, i, str(path)) for i, path in enumerate(media, start=1)],
         )
+        # SQLite 会复用删除后空出的编号：旧版本遗留的费用记录不能算到新讲的头上
+        self.conn.execute("UPDATE llm_call SET lecture_id = NULL WHERE lecture_id = ?", (cursor.lastrowid,))
         self.conn.commit()
         return self.lecture(course, seq)
 
@@ -338,7 +342,11 @@ class Library:
     def delete_lecture(self, lecture_id: int) -> None:
         """删除一讲在书库里的全部内容（转写、笔记、信号、各节记录……，由外键级联删除）；原始音视频不动。
         课程记忆和导出文件由调用方处理（见 pipeline/organize.delete_lecture）。"""
-        self.lecture_by_id(lecture_id)  # 不存在时报错
+        lecture = self.lecture_by_id(lecture_id)  # 不存在时报错
+        # 费用记录留在课程账上，但不再指向这个编号（编号会被新讲复用）；讲级记录本来没有 course_id，补上
+        self.conn.execute(
+            "UPDATE llm_call SET course_id = COALESCE(course_id, ?), lecture_id = NULL WHERE lecture_id = ?",
+            (lecture.course_id, lecture_id))
         self.conn.execute("DELETE FROM doc_page WHERE owner_type = 'lecture' AND owner_id = ?", (lecture_id,))
         self.conn.execute("DELETE FROM lecture WHERE id = ?", (lecture_id,))
         self.conn.commit()
@@ -351,6 +359,10 @@ class Library:
         owners += [("material", mid) for (mid,) in self.conn.execute("SELECT id FROM material WHERE course_id = ?",
                                                                       (course_id,))]
         self.conn.executemany("DELETE FROM doc_page WHERE owner_type = ? AND owner_id = ?", owners)
+        # 费用记录只留在总账里：课程和讲的编号会被复用，不能算到新课程头上
+        self.conn.execute(
+            "UPDATE llm_call SET course_id = NULL, lecture_id = NULL"
+            " WHERE course_id = ? OR lecture_id IN (SELECT id FROM lecture WHERE course_id = ?)", (course_id, course_id))
         self.conn.execute("DELETE FROM course WHERE id = ?", (course_id,))
         self.conn.commit()
 

@@ -109,12 +109,17 @@ def _move(library: Library, data_dir: Path, lecture: Lecture, source: Course, ta
         seq = lecture.seq if lecture.seq not in taken else next_free_seq(library, target)
     old_folder = lecture_dir(data_dir, source, lecture)
     memory = CourseMemory(library)
+    pages = MaterialStore(library)
+    had_pages = bool(pages.lecture_pages(lecture.id))
     library.move_lecture(lecture.id, target, seq)
     memory.drop_lecture(lecture.id)  # 旧课程里的整合日志作废
+    pages.set_lecture_pages(lecture.id, [], "auto")  # 原课程的课件页不再对应：按新课程的课件重新匹配
     rerun_from = rerun_step_for_move(source, target)
     if rerun_from == "integrate" and _plan_text(library, source) != _plan_text(library, target):
         rerun_from = "extract"  # 两门课的考试方案不同：笔记要按新课程的方案重新整理
-    library.reset_steps(lecture.id, [rerun_from, "integrate", "book"])
+    if rerun_from == "integrate" and (had_pages or target.slides == "provided"):
+        rerun_from = "slides"  # 原来用过课件页，或新课程按课件整理：从匹配课件起重跑
+    library.reset_steps(lecture.id, [rerun_from, "slides", "integrate", "book"])
     stale = restore_prefix(library, memory, source, lecture.seq) + restore_prefix(library, memory, target, seq)
     moved = library.lecture_by_id(lecture.id)
     new_folder = lecture_dir(data_dir, target, moved)
