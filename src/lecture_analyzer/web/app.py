@@ -24,7 +24,7 @@ from typing import Any, Sequence
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -126,14 +126,18 @@ def _static_version() -> str:
 
 
 def _register_errors(app: FastAPI, templates: Jinja2Templates) -> None:
-    """出错时显示中文说明页，而不是 JSON。"""
+    """出错时显示中文说明页；/api/ 下返回 JSON {"error": 说明}（与问答附件接口一致）。"""
 
     @app.exception_handler(LibraryError)
     async def library_error(request: Request, exc: LibraryError) -> Response:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"error": str(exc)}, status_code=400)
         return templates.TemplateResponse(request, "error.html", {"message": str(exc)}, status_code=400)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> Response:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"error": exc.detail}, status_code=exc.status_code, headers=exc.headers)
         return templates.TemplateResponse(request, "error.html", {"message": exc.detail}, status_code=exc.status_code)
 
 
@@ -245,7 +249,10 @@ def _register_data(app: FastAPI, db_path: Path) -> None:
         path = Path(found.media_path)
         if not path.is_file():
             raise HTTPException(404, "原始音视频文件不存在（可能被移动或删除）")
-        return FileResponse(path, media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        guessed = mimetypes.guess_type(path.name)[0] or ""
+        # 只按音视频类型输出；其他文件（误登记的 .html/.svg 等）一律当作下载，避免在本站同源执行脚本
+        media_type = guessed if guessed.startswith(("audio/", "video/")) else "application/octet-stream"
+        return FileResponse(path, media_type=media_type, headers={"X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/lectures/{lecture_id}")
     def lecture_json(lecture_id: int) -> dict[str, Any]:

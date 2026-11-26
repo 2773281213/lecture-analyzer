@@ -75,6 +75,21 @@ def test_media_parts_support_range_requests(m1_env):
     assert client.get(f"/media/{m1_env.lecture_id}/2").status_code == 404
 
 
+def test_media_never_served_as_html(m1_env):
+    evil = m1_env.tmp_path / "evil.html"
+    evil.write_text("<script>alert(1)</script>", encoding="utf-8")
+    with Library(m1_env.cfg.data_dir / "lecture.db") as library:
+        library.add_part(m1_env.lecture_id, evil)
+    client = TestClient(create_app(m1_env.cfg), base_url=BASE)
+    response = client.get(f"/media/{m1_env.lecture_id}/2")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    audio = client.get(f"/media/{m1_env.lecture_id}/1")
+    assert audio.status_code == 200 and audio.headers["content-type"].startswith("audio/")
+    assert audio.headers["x-content-type-options"] == "nosniff"
+
+
 def test_unknown_pages_are_404(m1_env):
     client = _processed_client(m1_env)
     assert client.get("/lectures/999").status_code == 404
@@ -94,6 +109,21 @@ def test_json_api(m1_env):
     assert lecture["schema_version"] == 3 and lecture["notes"]["title"] == "量效关系"
     book = client.get(f"/api/courses/{m1_env.course_id}").json()
     assert book["course"]["name"] == "药理学" and book["knowledge_points"][0]["key"] == 1
+
+
+def test_api_errors_are_json(m1_env):
+    client = TestClient(create_app(m1_env.cfg), base_url=BASE)
+    for url, message in (("/api/jobs/999999", "没有这个任务"),
+                         ("/api/courses/999999", "没有这门课"),
+                         ("/api/lectures/999999", "没有这一讲")):
+        response = client.get(url)
+        assert response.status_code == 404
+        assert response.headers["content-type"].startswith("application/json")
+        assert response.json()["error"] == message
+    method_not_allowed = client.post("/api/jobs")
+    assert method_not_allowed.status_code == 405 and "GET" in method_not_allowed.headers["allow"]
+    page = client.get("/courses/999999")
+    assert page.status_code == 404 and "text/html" in page.headers["content-type"]
 
 
 def test_foreign_host_is_rejected(m1_env):
@@ -180,6 +210,28 @@ def test_markdown_keeps_plain_numbers():
     """公式占位符不能和正文里的数字混淆。"""
     html = str(render_markdown("小于 75 mg 时 $x_1$，大于 300 mg 时 $x_2$"))
     assert "75 mg" in html and "300 mg" in html and "$x_1$" in html and "$x_2$" in html
+
+
+def test_markdown_leaves_code_and_attributes_alone():
+    html = str(render_markdown("price `$1` and `$2`"))
+    assert "<code>$1</code>" in html and "<code>$2</code>" in html
+    assert "<code>$x</code> costs $5" in str(render_markdown("`$x` costs $5"))
+    html = str(render_markdown("`foo **bar** baz`"))
+    assert "<code>foo **bar** baz</code>" in html and "<strong>" not in html
+    html = str(render_markdown("```python\ndef f(**kw): return g(**kw)\n```"))
+    assert "def f(**kw): return g(**kw)" in html and "<strong>" not in html
+    assert 'href="https://example.com/**a**"' in str(render_markdown("[link](https://example.com/**a**)"))
+    assert 'title="t **b** c"' in str(render_markdown('![alt](a.png "t **b** c")'))
+    html = str(render_markdown("| 指标 | 公式 |\n|---|---|\n| 灵敏度 | $P(+|D)$ |"))
+    assert "<td>$P(+|D)$</td>" in html
+    assert "<strong>장($x$)</strong>인" in str(render_markdown("**장($x$)**인"))
+
+
+def test_markdown_placeholder_cannot_collide():
+    html = str(render_markdown("a \ue0000\ue001 and $x^2$"))
+    assert "a \ue0000\ue001 and" in html and html.count("$x^2$") == 1
+    # 实体解码出来的私用区字符同样不能命中占位符
+    assert str(render_markdown("a &#xE000;0&#xE001; and $x^2$")).count("$x^2$") == 1
 
 
 def test_empty_library_shows_help(example_config):

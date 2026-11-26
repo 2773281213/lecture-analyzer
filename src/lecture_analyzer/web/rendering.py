@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import secrets
 from typing import Any
 
 from markdown_it import MarkdownIt
@@ -12,27 +13,60 @@ from ..pipeline.report_render import evidence_text
 
 _MARKDOWN = MarkdownIt("commonmark", {"html": False, "breaks": True}).enable("table")
 _MATH = re.compile(r"\$\$.+?\$\$|\$[^$\n]+?\$", re.S)
-_OPEN, _CLOSE = chr(0xE000), chr(0xE001)  # 私用区字符包住公式编号，不会与正文冲突
-_PLACEHOLDER = re.compile(_OPEN + r"(\d+)" + _CLOSE)
+# 围栏代码块（列表里缩进的也算）| 行内代码（内容不含反引号，两端反引号串长度相等）。
+# 必须用占有量词，否则一长串反引号会二次方回溯。
+_CODE = re.compile(r"^[ \t]*(`{3,}+|~{3,}+).*?^[ \t]*\1|(?<!`)(`++)[^`\n]+?\2(?!`)", re.S | re.M)
+_OPEN, _CLOSE = chr(0xE000), chr(0xE001)  # 私用区字符
+# 占位符是私用区字符包住「每次调用随机的 nonce + 公式编号」。正文里自带同样的字符（包括 &#xE000; 这类
+# 实体经 markdown-it 解码出来的）没有这次调用的 nonce，不会被当成占位符替换。
+_PLACEHOLDER = re.compile(_OPEN + r"([0-9a-f]{8})(\d+)" + _CLOSE)
 # CommonMark 规定 `)**` 后紧跟文字时不算加粗结束，中文、韩文里很常见（如 **장(소장·대장)**인），渲染后补上
 _LEFTOVER_BOLD = re.compile(r"\*\*([^*<>\n]+?)\*\*")
 _TAG = re.compile(r"(<[^>]*>)")
 _CITATION = re.compile(r"\[([QMPENTF]\d+)\]")
 
 
+def _fix_leftover_bold(html: str) -> str:
+    """给渲染结果补上加粗；只看代码之外的文字，标签属性（href、title）和代码内容都不动。"""
+    parts = _TAG.split(html)
+    depth = 0
+    for index, part in enumerate(parts):
+        if index % 2:
+            if part.startswith("<code"):
+                depth += 1
+            elif part.startswith("</code"):
+                depth = max(0, depth - 1)
+        elif depth == 0:
+            parts[index] = _LEFTOVER_BOLD.sub(r"<strong>\1</strong>", part)
+    return "".join(parts)
+
+
 def render_markdown(text: str | None) -> Markup:
-    """Markdown 转 HTML；公式先替换成占位符，避免其中的 * 和 _ 被当成强调，渲染后再转义放回。"""
+    """Markdown 转 HTML；公式先替换成占位符，避免其中的 * 和 _ 被当成强调，渲染后再转义放回。
+    代码段（围栏代码块、行内代码）原样保留，其中的 $ 不当公式、** 也不补加粗。
+    已知限制：链接地址里的 $（如 [a](https://e.com/$x$)）仍会被占位符破坏；转义的 \\$ 仍不被识别。"""
     spans: list[str] = []
+    nonce = secrets.token_hex(4)
 
     def stash(match: re.Match[str]) -> str:
         spans.append(match.group(0))
-        return f"{_OPEN}{len(spans) - 1}{_CLOSE}"
+        return f"{_OPEN}{nonce}{len(spans) - 1}{_CLOSE}"  # 不含冒号等行内终止符，公式多时渲染不会变慢
 
     def restore(match: re.Match[str]) -> str:
-        index = int(match.group(1))
-        return str(escape(spans[index])) if index < len(spans) else match.group(0)
+        index = int(match.group(2))
+        if match.group(1) == nonce and index < len(spans):
+            return str(escape(spans[index]))
+        return match.group(0)
 
-    html = _LEFTOVER_BOLD.sub(r"<strong>\1</strong>", _MARKDOWN.render(_MATH.sub(stash, text or "")))
+    source = text or ""
+    pieces: list[str] = []
+    last = 0
+    for match in _CODE.finditer(source):
+        pieces += [_MATH.sub(stash, source[last:match.start()]), match.group(0)]
+        last = match.end()
+    pieces.append(_MATH.sub(stash, source[last:]))
+    # 先补加粗、后恢复公式：公式里的 ** 不会被当成加粗
+    html = _fix_leftover_bold(_MARKDOWN.render("".join(pieces)))
     return Markup(_PLACEHOLDER.sub(restore, html))
 
 
