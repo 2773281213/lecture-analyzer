@@ -217,18 +217,24 @@ def test_extract_slides_and_exam_plan_report_fallback_profile(m1_env, monkeypatc
 def test_locks_release_in_process_guard_on_open_error_and_retry_permission(tmp_path, monkeypatch):
     lock_path = tmp_path / "test.lock"
     calls = 0
+    sleeps = 0
     real_open = Path.open
 
-    def fail_once(self: Path, *args, **kwargs):
+    def fail_twice(self: Path, *args, **kwargs):
         nonlocal calls
-        if self == lock_path and calls == 0:
+        if self == lock_path and calls < 2:
             calls += 1
             raise PermissionError("busy")
         return real_open(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", fail_once)
+    def fake_sleep(seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+
+    monkeypatch.setattr(Path, "open", fail_twice)
+    monkeypatch.setattr(locks.time, "sleep", fake_sleep)
     with locks.hold(lock_path, wait=1.0):
-        assert calls == 1
+        assert calls == 2 and sleeps >= 1
 
     # 如果 _lock_file 抛出错误，进程内 RLock 必须被释放，不能导致其他线程永久死锁
     def always_fail(path, deadline):

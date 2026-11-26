@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Literal, Sequence
 
 from ..documents import DocPage
-from ..llm import ImagePart, LLMProvider, Part, TextPart, Usage
+from ..llm import ImagePart, LLMProvider, ModelProfile, Part, TextPart, Usage, billed_profile
 from ..llm.base import Effort
 from ..prompts import load_prompt
 from ..schemas import PageDigest, PageDigestBatch
@@ -37,8 +38,9 @@ def digest_pages(
     policy: ImagePolicy = "auto",
     batch_size: int = 6,
     effort: Effort | None = None,
+    on_call: Callable[[ModelProfile, Usage], None] | None = None,
 ) -> tuple[list[PageDigest], Usage]:
-    """分批识别页面，返回与输入页一一对应的结果和总用量。"""
+    """分批识别页面，返回与输入页一一对应的结果和总用量。on_call 在每次模型调用后收到实际计费的档案和这次的用量。"""
     system = load_prompt("page_digest", subject=subject)
     digests: list[PageDigest] = []
     usage = Usage()
@@ -48,6 +50,8 @@ def digest_pages(
             _batch_parts(batch, policy, provider.profile.vision), PageDigestBatch, system=system, effort=effort
         )
         usage = usage + result.usage
+        if on_call is not None:
+            on_call(billed_profile(result, provider.profile), result.usage)
         digests.extend(_align(batch, result.output.pages))
     return digests, usage
 

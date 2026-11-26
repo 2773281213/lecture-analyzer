@@ -22,7 +22,7 @@ from ..archive import FoundDocument, expand, safe_relative
 from ..config import AppConfig
 from ..documents import DocPage, images_to_pdf, iter_pages
 from ..library import Course, Library, LibraryError, PageRef
-from ..llm import Usage, create_provider
+from ..llm import ModelProfile, Usage, create_provider
 from ..locks import hold, material_lock, materials_lock
 from ..materials import PAGE_KINDS, Material, MaterialStore
 from ..schemas import PageDigest
@@ -225,41 +225,50 @@ def digest_material(cfg: AppConfig, library: Library, material: Material, report
     batches = [pending[i : i + size] for i in range(0, len(pending), size)]
     subject = library.course_by_id(material.course_id).settings.subject
     errors: list[BaseException] = []
+    models: dict[str, None] = {}  # 实际作答的型号（主模型拒答时含备用型号）
     with ThreadPoolExecutor(max_workers=max(cfg.materials.digest_workers, 1)) as pool:
         futures = [pool.submit(_digest_batch, cfg, folder, batch, subject) for batch in batches]
         for future in as_completed(futures):  # 谁先完成就先落库并回报进度，不被前面慢批次阻塞
-            digests, usage = _result_or_error(future, errors)
+            digests, calls = _result_or_error(future, errors)
             if digests is None:
                 continue
             store.save_pages(material.id, digests)
-            library.log_call(None, "page_digest", profile, usage, course_id=material.course_id)
+            for used, usage in calls:  # 按实际作答的档案记账（书库连接不能跨线程，所以在主线程写）
+                library.log_call(None, "page_digest", used, usage, course_id=material.course_id)
+                models.setdefault(used.model)
+                outcome.usage = outcome.usage + usage
             outcome.pages += len(digests)
-            outcome.usage = outcome.usage + usage
             report(f"「{material.title}」已识别 {len(done) + outcome.pages}/{material.page_count} 页")
     if errors:
         store.set_step(material.id, "digest", "failed", f"{type(errors[0]).__name__}: {errors[0]}")
         raise errors[0]
-    store.set_step(material.id, "digest", "done", f"{material.page_count} 页（{profile.model}）")
+    store.set_step(material.id, "digest", "done", f"{material.page_count} 页（{'、'.join(models) or profile.model}）")
     return outcome
 
 
-def _digest_batch(cfg: AppConfig, folder: Path, batch: Sequence[int], subject: str) -> tuple[list[PageDigest], Usage]:
-    """在线程里识别一批页；每批单独创建适配器，不在线程之间共用连接。"""
+Calls = list[tuple[ModelProfile, Usage]]
+
+
+def _digest_batch(cfg: AppConfig, folder: Path, batch: Sequence[int], subject: str) -> tuple[list[PageDigest], Calls]:
+    """在线程里识别一批页；每批单独创建适配器，不在线程之间共用连接。返回结果和各次调用的（计费档案，用量）。"""
     provider = create_provider(cfg.profile_for_step("page_digest"))
     pages = cached_pages(folder, batch)
-    return digest_pages(provider, pages, subject=subject, batch_size=len(pages),
-                        effort=cfg.effort_for_step("page_digest"))
+    calls: Calls = []
+    digests, _ = digest_pages(provider, pages, subject=subject, batch_size=len(pages),
+                              effort=cfg.effort_for_step("page_digest"),
+                              on_call=lambda used, usage: calls.append((used, usage)))
+    return digests, calls
 
 
 def _result_or_error(
-    future: Future[tuple[list[PageDigest], Usage]], errors: list[BaseException]
-) -> tuple[list[PageDigest] | None, Usage]:
+    future: Future[tuple[list[PageDigest], Calls]], errors: list[BaseException]
+) -> tuple[list[PageDigest] | None, Calls]:
     try:
-        digests, usage = future.result()
+        digests, calls = future.result()
     except Exception as exc:  # 记下错误，先保存其他批次的结果
         errors.append(exc)
-        return None, Usage()
-    return digests, usage
+        return None, []
+    return digests, calls
 
 
 def digest_pending(

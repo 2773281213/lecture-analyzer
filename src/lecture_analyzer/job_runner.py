@@ -122,9 +122,13 @@ class JobRunner:
         别的书架程序已经在执行这个书库的任务时，本进程只提交任务。"""
         if self.owner or not self._owner_lock.acquire():
             return
+        try:
+            with Library(self.db_path) as library:
+                JobStore(library).pause_interrupted()
+        except BaseException:  # 书库打不开等：放开执行器锁，别的书架程序（或下次启动）还能接手
+            self._owner_lock.release()
+            raise
         self.owner = True
-        with Library(self.db_path) as library:
-            JobStore(library).pause_interrupted()
         self._threads = [threading.Thread(target=self._loop, args=(lane,), name=f"lec-jobs-{lane}", daemon=True)
                          for lane in LANES]
         for thread in self._threads:
@@ -255,6 +259,9 @@ class JobRunner:
             if process is not None:
                 with self._lock:
                     self._processes.pop(job_id, None)
+            else:  # 没启动子进程（启动前已取消、书架正在关闭或启动失败）：日志是空的，失败原因已写进任务表
+                with suppress(OSError):
+                    log.unlink(missing_ok=True)
 
     def _launch(self, job_id: int, output: IO[bytes]) -> subprocess.Popen[bytes] | None:
         """标为进行中并启动子进程；任务已被取消、书架正在关闭时返回 None。"""

@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from ..config import AppConfig
 from ..knowledge import CourseMemory, KnowledgePoint
 from ..library import Course, Library
-from ..llm import LLMError, LLMProvider, TextPart, Usage, create_provider
+from ..llm import LLMError, LLMProvider, ModelProfile, TextPart, Usage, billed_profile, create_provider
 from ..llm.base import Effort
 from ..materials import ITEM_KINDS, Material, MaterialItem, MaterialStore, NewItem
 from ..prompts import load_prompt
@@ -91,16 +91,21 @@ def ensure_items(cfg: AppConfig, library: Library, material: Material, report: R
     profile = cfg.profile_for_step("material")
     subject = library.course_by_id(material.course_id).settings.subject
     report(f"拆分「{material.title}」的题目…")
+    models: dict[str, None] = {}
+
+    def log(used: ModelProfile, usage: Usage) -> None:  # 每次调用后按实际作答的档案记账，后面的批次失败也不丢
+        library.log_call(None, "material", used, usage, course_id=material.course_id)
+        models.setdefault(used.model)
+
     try:
-        items, usage = split_items(create_provider(profile), material, store.pages(material.id), subject,
-                                   effort=cfg.effort_for_step("material"))
+        items, _ = split_items(create_provider(profile), material, store.pages(material.id), subject,
+                               effort=cfg.effort_for_step("material"), on_call=log)
     except Exception as exc:  # 记录失败原因后照常抛出
         store.set_step(material.id, "items", "failed", f"{type(exc).__name__}: {exc}")
         raise
     store.replace_items(material.id, items)
     store.reset_steps(material.id, ["kp_map"])
-    library.log_call(None, "material", profile, usage, course_id=material.course_id)
-    store.set_step(material.id, "items", "done", f"{len(items)} 条（{profile.model}）")
+    store.set_step(material.id, "items", "done", f"{len(items)} 条（{'、'.join(models) or profile.model}）")
     report(f"「{material.title}」拆出 {len(items)} 条")
 
 
@@ -121,12 +126,18 @@ def ensure_mapped(cfg: AppConfig, library: Library, course: Course, report: Repo
             profile = cfg.profile_for_step("material")
             items = store.items(material.id)
             report(f"把「{material.title}」的 {len(items)} 条对应到课程知识点…")
-            mapping, usage = map_items(create_provider(profile), tree, items, course.settings.subject, material,
-                                       effort=cfg.effort_for_step("material"))
+            models: dict[str, None] = {}
+
+            def log(used: ModelProfile, usage: Usage) -> None:
+                library.log_call(None, "material", used, usage, course_id=course.id)
+                models.setdefault(used.model)
+
+            mapping, _ = map_items(create_provider(profile), tree, items, course.settings.subject, material,
+                                   effort=cfg.effort_for_step("material"), on_call=log)
             store.set_item_kps(material.id, mapping)
-            library.log_call(None, "material", profile, usage, course_id=course.id)
             linked = sum(1 for keys in mapping.values() if keys)
-            store.set_step(material.id, "kp_map", "done", f"{linked}/{len(items)} 条对应到知识点（{profile.model}）",
+            store.set_step(material.id, "kp_map", "done",
+                           f"{linked}/{len(items)} 条对应到知识点（{'、'.join(models) or profile.model}）",
                            fingerprint=fingerprint)
             done += 1
     return done
@@ -182,7 +193,8 @@ def page_batches(pages: Sequence[PageDigest], limit: int = ITEMS_BATCH_CHARS) ->
 
 
 def split_items(
-    provider: LLMProvider, material: Material, pages: Sequence[PageDigest], subject: str, effort: Effort | None = None
+    provider: LLMProvider, material: Material, pages: Sequence[PageDigest], subject: str, effort: Effort | None = None,
+    on_call: Callable[[ModelProfile, Usage], None] | None = None,
 ) -> tuple[list[NewItem], Usage]:
     system = load_prompt("material_items", subject=subject, kind=material.kind_label)
     items: list[NewItem] = []
@@ -194,6 +206,8 @@ def split_items(
         parts.append(TextPart(f"请输出第 {batch[0].page_no}–{batch[-1].page_no} 页的题目或条目。"))
         result = provider.generate_structured(parts, ItemBatch, system=system, effort=effort)
         usage = usage + result.usage
+        if on_call is not None:
+            on_call(billed_profile(result, provider.profile), result.usage)
         continuation = result.output.continuation_md.strip()
         if continuation and items:
             last = items[-1]
@@ -221,7 +235,7 @@ def _new_item(out: ItemOut, batch: Sequence[PageDigest]) -> NewItem:
 
 def map_items(
     provider: LLMProvider, tree: Sequence[KnowledgePoint], items: Sequence[MaterialItem], subject: str,
-    material: Material, effort: Effort | None = None,
+    material: Material, effort: Effort | None = None, on_call: Callable[[ModelProfile, Usage], None] | None = None,
 ) -> tuple[dict[int, list[int]], Usage]:
     """返回 {题目 item.id: [K 编号]}；模型漏掉的题目记为没有对应的知识点。"""
     system = load_prompt("material_map", subject=subject, kind=material.kind_label)
@@ -236,6 +250,8 @@ def map_items(
                  TextPart("请输出每一条对应的课程知识点。")]
         result = provider.generate_structured(parts, ItemMappingBatch, system=system, effort=effort)
         usage = usage + result.usage
+        if on_call is not None:
+            on_call(billed_profile(result, provider.profile), result.usage)
         by_idx = {item.idx: item for item in batch}
         for entry in result.output.mappings:
             item = by_idx.get(entry.item)

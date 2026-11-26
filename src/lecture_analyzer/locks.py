@@ -27,6 +27,7 @@ from .library import LibraryError
 
 UI_WAIT = 3.0  # 界面和命令行的操作最多等这么久（例如等任务导出完）
 POLL_SECONDS = 0.2
+OPEN_RETRY_SECONDS = 10.0  # 锁文件打不开（不是被别人锁着）时最多重试这么久，多半是路径被占用或没有权限
 
 
 def lecture_lock(data_dir: Path, lecture_id: int) -> Path:
@@ -142,14 +143,21 @@ def _release(path: Path) -> None:
 
 def _lock_file(path: Path, deadline: float | None) -> IO[bytes] | None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    open_failing_since: float | None = None  # 打不开锁文件（如路径被同名目录占住）时从第一次失败开始计时
     while True:
-        file: IO[bytes] | None = None
         try:
             file = path.open("a+b")  # 每次重新打开：锁文件被删掉后不会锁在已删除的文件上
-            lock_file(file)
-            return file
-        except OSError:  # 别的进程拿着锁，或 Windows 上锁文件刚被删除尚未完成回收
-            if file is not None:
+        except OSError as exc:  # Windows 上锁文件刚被删除、尚未完成回收时会短暂打不开
+            now = time.monotonic()
+            open_failing_since = open_failing_since if open_failing_since is not None else now
+            if now - open_failing_since >= OPEN_RETRY_SECONDS:  # 一直打不开：不是在等别人，不能无限等下去
+                raise LibraryError(f"打不开锁文件 {path}：{exc}") from exc
+        else:
+            open_failing_since = None
+            try:
+                lock_file(file)
+                return file
+            except OSError:  # 别的进程拿着锁
                 file.close()
         if deadline is not None and time.monotonic() >= deadline:
             return None
