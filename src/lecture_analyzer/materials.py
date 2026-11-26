@@ -162,9 +162,10 @@ class MaterialStore:
             self._save_status(material_id, status)
 
     def _save_status(self, material_id: int, status: dict[str, dict[str, Any]]) -> None:
-        """只写回进度；提交由调用方的事务（Library.immediate）负责。"""
+        """写回进度并立即提交（与原来一致：调用方之前未提交的写也一并提交）。"""
         payload = json.dumps(status, ensure_ascii=False)
         self.conn.execute("UPDATE material SET status = ? WHERE id = ?", (payload, material_id))
+        self.conn.commit()
 
     # ---------- 页面 ----------
 

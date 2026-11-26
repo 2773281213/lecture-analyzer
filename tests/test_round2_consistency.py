@@ -123,6 +123,30 @@ def test_concurrent_status_updates_do_not_lose_steps(tmp_path):
         assert not library.conn.in_transaction
 
 
+def test_set_step_still_commits_pending_writes(tmp_path):
+    db = tmp_path / "lecture.db"
+    with Library(db) as library:
+        course = library.add_course("c", CourseSettings())
+        lecture = library.add_lecture(course, 1, [tmp_path / "a.wav"])
+        store = MaterialStore(library)
+        material = store.add(course, "other", "m", "x")
+        # 调用方之前有未提交的写：set_step 仍应一并提交（保持原来的提交语义）
+        library.conn.execute("UPDATE course SET instructions = ? WHERE id = ?", ("x", course.id))
+        library.set_step(lecture.id, "x", "done")
+        assert not library.conn.in_transaction
+    with Library(db) as reader:
+        assert reader.course_by_id(course.id).instructions == "x"
+        assert reader.lecture_by_id(lecture.id).step_state("x") == "done"
+
+    with Library(db) as library:
+        library.conn.execute("UPDATE course SET instructions = ? WHERE id = ?", ("y", course.id))
+        MaterialStore(library).set_step(material.id, "x", "done")
+        assert not library.conn.in_transaction
+    with Library(db) as reader:
+        assert reader.course_by_id(course.id).instructions == "y"
+        assert MaterialStore(reader).get(material.id).step_state("x") == "done"
+
+
 # ---------- T3a：删除对话时取消没答完的问题，任务取消后不再写回 ----------
 
 

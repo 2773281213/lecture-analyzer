@@ -159,7 +159,8 @@ async def delete_thread(request: Request, course_id: int, thread: int) -> Redire
         course = library.course_by_id(course_id)
         store = QAStore(library)
         turns = store.thread(course, thread)
-        jobs = [job for job in JobStore(library).of_kind(course, "qa") if job.params.get("thread") == thread]
+        jobs = [job for job in JobStore(library).of_kind(course, "qa")
+                if int(job.params.get("thread", 0)) == thread]
     for job in jobs:  # 还没答完的问题一并取消：答完后不会再把这段对话写回来
         if not job.finished:
             request.app.state.jobs.cancel(job.id)

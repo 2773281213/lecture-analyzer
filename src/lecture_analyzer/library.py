@@ -396,9 +396,10 @@ class Library:
             self._save_status(lecture_id, status)
 
     def _save_status(self, lecture_id: int, status: dict[str, dict[str, str]]) -> None:
-        """只写回进度；提交由调用方的事务（immediate）负责。"""
+        """写回进度并立即提交（与原来一致：调用方之前未提交的写也一并提交）。"""
         payload = json.dumps(status, ensure_ascii=False)
         self.conn.execute("UPDATE lecture SET status = ? WHERE id = ?", (payload, lecture_id))
+        self.conn.commit()
 
     # ---------- 标签与复习进度 ----------
 
