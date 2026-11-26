@@ -36,9 +36,14 @@ def _ready_lectures(library: Library, course: Course) -> set[int]:
     return {a.lecture_id for kp in CourseMemory(library).tree(course) for a in kp.appearances}
 
 
+def _job_thread(job: Job) -> int:
+    """任务所属的对话编号；参数里没有或为 None 时按 0 处理。"""
+    return int(job.params.get("thread") or 0)
+
+
 def _thread_jobs(library: Library, course: Course, thread: int, answered_at: str) -> tuple[list[Job], list[Job]]:
     """这段对话里还在回答的问题，以及最后一次回答之后失败或取消的问题。"""
-    jobs = [job for job in JobStore(library).of_kind(course, "qa") if job.params.get("thread") == thread]
+    jobs = [job for job in JobStore(library).of_kind(course, "qa") if _job_thread(job) == thread]
     pending = [job for job in jobs if not job.finished]
     failed = [job for job in jobs if job.state in ("failed", "cancelled") and job.updated_at > answered_at]
     return pending, failed
@@ -148,7 +153,7 @@ async def ask(request: Request, course_id: int) -> RedirectResponse:
 
 def _new_thread(library: Library, course: Course) -> int:
     """新对话的编号：已存的对话和提过问的对话（含还在回答、没答成的）都要避开。"""
-    asked = [int(job.params.get("thread", 0)) + 1 for job in JobStore(library).of_kind(course, "qa")]
+    asked = [_job_thread(job) + 1 for job in JobStore(library).of_kind(course, "qa")]
     return max([QAStore(library).next_thread(course), *asked])
 
 
@@ -160,7 +165,7 @@ async def delete_thread(request: Request, course_id: int, thread: int) -> Redire
         store = QAStore(library)
         turns = store.thread(course, thread)
         jobs = [job for job in JobStore(library).of_kind(course, "qa")
-                if int(job.params.get("thread", 0)) == thread]
+                if _job_thread(job) == thread]
     for job in jobs:  # 还没答完的问题一并取消：答完后不会再把这段对话写回来
         if not job.finished:
             request.app.state.jobs.cancel(job.id)

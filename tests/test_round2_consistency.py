@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 from typer.testing import CliRunner
@@ -14,9 +15,10 @@ from lecture_analyzer.job_handlers import run_job
 from lecture_analyzer.jobs import JobStore
 from lecture_analyzer.library import Library, LibraryError, PageRef
 from lecture_analyzer.llm import ModelProfile, Usage
-from lecture_analyzer.locks import lecture_lock, memory_lock
+from lecture_analyzer.locks import hold, lecture_lock, material_lock, materials_lock, memory_lock
 from lecture_analyzer.materials import MaterialStore
 from lecture_analyzer.pipeline import qa as qa_module
+from lecture_analyzer.pipeline.ingest import material_dir
 from lecture_analyzer.pipeline.organize import delete_course, move_lecture
 from lecture_analyzer.qa_attachments import mark_used, save_attachment
 from lecture_analyzer.schemas import PageDigest
@@ -77,7 +79,6 @@ def test_costs_of_deleted_courses_and_lectures_do_not_move_to_new_ones(tmp_path)
 
 
 def test_legacy_orphan_costs_are_detached_when_ids_are_reused(tmp_path):
-    profile = ModelProfile(name="p", adapter="openai_compat", model="m")
     with Library(tmp_path / "lecture.db") as library:
         # 模拟旧版本删课后留下的记录：编号还指着已经不存在的课程和讲
         library.conn.execute(
@@ -229,3 +230,41 @@ def test_delete_course_waits_for_command_line_work(m1_env, which):
         delete_course(library, data_dir, course)
     assert not lecture_lock(data_dir, m1_env.lecture_id).exists()
     assert not memory_lock(data_dir, m1_env.course_id).exists()
+
+
+def test_delete_course_refuses_when_content_changed_while_waiting(tmp_path):
+    """等待资料导入锁期间新导入的资料会被级联删掉记录，但磁盘目录和锁文件会漏删；发现变动就拒绝本次删除。"""
+    data_dir = tmp_path / "data"
+    db = data_dir / "lecture.db"
+    with Library(db) as library:
+        course_id = library.add_course("药理学", CourseSettings()).id
+    created: list[int] = []
+    entered = threading.Event()
+
+    def simulate_import() -> None:
+        with hold(materials_lock(data_dir, course_id)):
+            entered.set()
+            time.sleep(0.4)
+            with Library(db) as library:
+                material = MaterialStore(library).add(
+                    library.course_by_id(course_id), "other", "新导入资料", "new.pdf")
+                folder = material_dir(data_dir, material.id)
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "new.pdf").write_bytes(b"%PDF-1.4")
+                created.append(material.id)
+
+    thread = threading.Thread(target=simulate_import)
+    thread.start()
+    entered.wait(timeout=5)
+    with Library(db) as library:
+        with pytest.raises(LibraryError, match="刚有变动"):
+            delete_course(library, data_dir, library.course_by_id(course_id))
+    thread.join()
+    # 第一次删除被拒绝：课程和新导入的资料目录都还在
+    with Library(db) as library:
+        assert library.course_by_id(course_id)
+        assert material_dir(data_dir, created[0]).exists()
+        delete_course(library, data_dir, library.course_by_id(course_id))
+    # 第二次删除成功：新导入的资料目录和它的锁文件都被清理
+    assert not material_dir(data_dir, created[0]).exists()
+    assert not material_lock(data_dir, created[0]).exists()

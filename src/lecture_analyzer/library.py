@@ -173,7 +173,9 @@ class Library:
     @contextmanager
     def immediate(self) -> Iterator[None]:
         """读-改-写同一行（如处理进度）时先拿写锁：两个进程交错时不会覆盖对方刚写的内容。
-        已经在事务里时沿用外层事务。事务只包住几毫秒的读写，不能跨模型调用。"""
+        不在事务中时用 BEGIN IMMEDIATE 包住读改写并提交；已在事务中（之前有未提交的写、已持有写锁）
+        时不另开事务。注意 set_step / reset_steps 写完总会立即提交（与原来一致），不能放进需要
+        整体回滚的外层事务。事务只包住几毫秒的读写，不能跨模型调用。"""
         if self.conn.in_transaction:
             yield
             return

@@ -88,6 +88,14 @@ def test_media_never_served_as_html(m1_env):
     audio = client.get(f"/media/{m1_env.lecture_id}/1")
     assert audio.status_code == 200 and audio.headers["content-type"].startswith("audio/")
     assert audio.headers["x-content-type-options"] == "nosniff"
+    svg = m1_env.tmp_path / "evil.svg"
+    svg.write_text("<svg onload=alert(1)></svg>", encoding="utf-8")
+    with Library(m1_env.cfg.data_dir / "lecture.db") as library:
+        library.add_part(m1_env.lecture_id, svg)
+    svg_response = client.get(f"/media/{m1_env.lecture_id}/3")
+    assert svg_response.status_code == 200
+    assert svg_response.headers["content-type"] == "application/octet-stream"
+    assert svg_response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_unknown_pages_are_404(m1_env):

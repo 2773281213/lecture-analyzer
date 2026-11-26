@@ -183,8 +183,9 @@ def delete_materials(library: Library, data_dir: Path, course: Course, materials
 def delete_course(library: Library, data_dir: Path, course: Course) -> None:
     """删除整门课：书库数据、导出的书、各讲中间文件、资料副本和问答附件。"""
     ensure_idle(library, course, "删除课程")
-    lectures = library.lectures(course)
-    materials = MaterialStore(library).list(course)
+    # 固定按编号排序再加锁，与其他批量删除交叉等锁时不会互相死等
+    lectures = sorted(library.lectures(course), key=lambda lecture: lecture.id)
+    materials = sorted(MaterialStore(library).list(course), key=lambda material: material.id)
     with ExitStack() as stack:  # 命令行正在处理这门课时（不经过任务表）也挡住：按 locks.py 的顺序加锁
         for lecture in lectures:
             stack.enter_context(hold(lecture_lock(data_dir, lecture.id), wait=0,
@@ -195,6 +196,11 @@ def delete_course(library: Library, data_dir: Path, course: Course) -> None:
         stack.enter_context(hold(materials_lock(data_dir, course.id), wait=UI_WAIT,
                                  busy=f"「{course.name}」正在导入资料，请等导入完再删除课程"))
         stack.enter_context(memory_free(data_dir, course, "删除课程"))
+        # 拿到全部锁后再查一遍：等锁期间新导入的资料会被级联删掉记录，但磁盘目录和锁文件漏删；有变动就放弃
+        if ({lecture.id for lecture in lectures} != {lecture.id for lecture in library.lectures(course)}
+                or {material.id for material in materials}
+                != {material.id for material in MaterialStore(library).list(course)}):
+            raise LibraryError("课程内容刚有变动（例如刚导入了资料），请再删除一次")
         ensure_idle(library, course, "删除课程")  # 等锁期间可能有任务排队进来
         library.delete_course(course.id)
         for lecture in lectures:

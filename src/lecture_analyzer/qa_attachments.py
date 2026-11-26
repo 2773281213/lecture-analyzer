@@ -381,13 +381,22 @@ def _read_legacy_office(item: StoredAttachment, work: Path, text_budget: int,
 
 
 def _read_xml_member(archive: zipfile.ZipFile, name: str, attachment_name: str) -> bytes:
-    """读 Office 压缩包里的一个 XML；先按中央目录声明的解压大小拦截，避免高压缩比的 XML 撑爆内存。"""
+    """读 Office 压缩包里的一个 XML；先按中央目录声明的解压大小拦截，再分块读出，避免高压缩比的 XML 撑爆内存。"""
     info = archive.getinfo(name)
+    too_big = f"附件「{attachment_name}」内容过大（解压后超过 {human_size(MAX_XML_BYTES)}），请另存为 PDF 后再上传"
     if info.file_size > MAX_XML_BYTES:  # 在函数体内读模块常量，测试可以 monkeypatch
-        raise AttachmentError(
-            f"附件「{attachment_name}」内容过大（解压后超过 {human_size(MAX_XML_BYTES)}），请另存为 PDF 后再上传"
-        )
-    return archive.read(info)  # 读出的字节不会超过声明的 file_size；伪造小值会因 CRC 不符抛 BadZipFile
+        raise AttachmentError(too_big)
+    chunks: list[bytes] = []
+    total = 0
+    # 分块读取让 zlib 每次只解压一小块：伪造小 file_size 的压缩炸弹也占不了多少内存，
+    # 最终会因 CRC 不符抛 BadZipFile，由 read_attachments 转成 AttachmentError。
+    with archive.open(info) as src:
+        while chunk := src.read(64 * 1024):
+            total += len(chunk)
+            if total > MAX_XML_BYTES:
+                raise AttachmentError(too_big)
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _clean_name(raw_name: str) -> str:

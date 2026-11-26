@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import io
 import os
+import struct
 import subprocess
+import tracemalloc
 import zipfile
 from pathlib import Path
 
@@ -63,6 +65,18 @@ def _pptx_bytes(text: str) -> bytes:
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("ppt/slides/slide1.xml", xml)
     return buf.getvalue()
+
+
+def _forged_docx_bytes(xml_bytes: bytes, fake_size: int = 10) -> bytes:
+    """构造把中央目录里 word/document.xml 的未压缩大小改成 fake_size 的 .docx。"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("word/document.xml", xml_bytes)
+    raw = bytearray(buf.getvalue())
+    cd_pos = raw.find(b"PK\x01\x02")
+    assert cd_pos != -1
+    struct.pack_into("<I", raw, cd_pos + 24, fake_size)  # 中央目录记录里 uncompressed size 字段的偏移
+    return bytes(raw)
 
 
 def test_check_extracted_removes_junction_without_touching_external(tmp_path: Path, monkeypatch):
@@ -211,3 +225,17 @@ def test_pdf_page_render_respects_max_image_side(tmp_path: Path):
     normal = load_pages(normal_path, tmp_path / "work-normal")
     normal_pix = pymupdf.Pixmap(normal[0].image_png)
     assert (normal_pix.width, normal_pix.height) == (935, 1210)
+
+
+def test_docx_forged_file_size_uses_bounded_memory(tmp_path: Path):
+    # 中央目录把 file_size 伪造成 10，实际解压出约 4MB XML：分块读取时峰值内存应远小于整段解压
+    xml = b"<w:p><w:r><w:t>" + b"x" * (4 * 1024 * 1024) + b"</w:t></w:r></w:p>"
+    attachment = save_attachment(tmp_path, 1, "伪造.docx", _forged_docx_bytes(xml, fake_size=10))
+    tracemalloc.start()
+    try:
+        with pytest.raises(AttachmentError):
+            read_attachments([attachment], tmp_path / "work")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 2 * 1024 * 1024
