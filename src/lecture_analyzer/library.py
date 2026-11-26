@@ -12,11 +12,11 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 from .asr.base import Segment
 from .course import CourseSettings, SettingsError, build_settings
@@ -169,6 +169,21 @@ class Library:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+    @contextmanager
+    def immediate(self) -> Iterator[None]:
+        """读-改-写同一行（如处理进度）时先拿写锁：两个进程交错时不会覆盖对方刚写的内容。
+        已经在事务里时沿用外层事务。事务只包住几毫秒的读写，不能跨模型调用。"""
+        if self.conn.in_transaction:
+            yield
+            return
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self.conn.rollback()
+            raise
+        self.conn.commit()
 
     # ---------- 课程（书） ----------
 
@@ -367,21 +382,23 @@ class Library:
         self.conn.commit()
 
     def set_step(self, lecture_id: int, step: str, state: str, detail: str = "") -> None:
-        status = self.lecture_by_id(lecture_id).status
-        status[step] = {"state": state, "at": _now(), "detail": detail}
-        self._save_status(lecture_id, status)
+        with self.immediate():  # 读-改-写整段拿写锁，两个进程同时改进度时不会丢写
+            status = self.lecture_by_id(lecture_id).status
+            status[step] = {"state": state, "at": _now(), "detail": detail}
+            self._save_status(lecture_id, status)
 
     def reset_steps(self, lecture_id: int, steps: Iterable[str]) -> None:
         """清除这些步骤的进度，下次运行时重跑（依赖它们的步骤也会跟着重跑）。"""
-        status = self.lecture_by_id(lecture_id).status
-        for step in steps:
-            status.pop(step, None)
-        self._save_status(lecture_id, status)
+        with self.immediate():  # 读-改-写整段拿写锁，两个进程同时改进度时不会丢写
+            status = self.lecture_by_id(lecture_id).status
+            for step in steps:
+                status.pop(step, None)
+            self._save_status(lecture_id, status)
 
     def _save_status(self, lecture_id: int, status: dict[str, dict[str, str]]) -> None:
+        """只写回进度；提交由调用方的事务（immediate）负责。"""
         payload = json.dumps(status, ensure_ascii=False)
         self.conn.execute("UPDATE lecture SET status = ? WHERE id = ?", (payload, lecture_id))
-        self.conn.commit()
 
     # ---------- 标签与复习进度 ----------
 

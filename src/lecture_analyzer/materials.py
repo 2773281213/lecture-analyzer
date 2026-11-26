@@ -149,20 +149,22 @@ class MaterialStore:
         return affected
 
     def set_step(self, material_id: int, step: str, state: str, detail: str = "", **extra: Any) -> None:
-        status = self.get(material_id).status
-        status[step] = {"state": state, "at": _now(), "detail": detail, **extra}
-        self._save_status(material_id, status)
+        with self.library.immediate():  # 读-改-写整段拿写锁，两个进程同时改进度时不会丢写
+            status = self.get(material_id).status
+            status[step] = {"state": state, "at": _now(), "detail": detail, **extra}
+            self._save_status(material_id, status)
 
     def reset_steps(self, material_id: int, steps: Iterable[str]) -> None:
-        status = self.get(material_id).status
-        for step in steps:
-            status.pop(step, None)
-        self._save_status(material_id, status)
+        with self.library.immediate():  # 读-改-写整段拿写锁，两个进程同时改进度时不会丢写
+            status = self.get(material_id).status
+            for step in steps:
+                status.pop(step, None)
+            self._save_status(material_id, status)
 
     def _save_status(self, material_id: int, status: dict[str, dict[str, Any]]) -> None:
+        """只写回进度；提交由调用方的事务（Library.immediate）负责。"""
         payload = json.dumps(status, ensure_ascii=False)
         self.conn.execute("UPDATE material SET status = ? WHERE id = ?", (payload, material_id))
-        self.conn.commit()
 
     # ---------- 页面 ----------
 

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import threading
+
+import pytest
+
 from lecture_analyzer.course import CourseSettings
-from lecture_analyzer.library import Library, PageRef
+from lecture_analyzer.library import Library, LibraryError, PageRef
 from lecture_analyzer.llm import ModelProfile, Usage
 from lecture_analyzer.materials import MaterialStore
 from lecture_analyzer.pipeline.organize import move_lecture
@@ -73,3 +77,35 @@ def test_legacy_orphan_costs_are_detached_when_ids_are_reused(tmp_path):
         library.add_lecture(course, 1, [tmp_path / "a.wav"])
         assert course.id == 1 and library.cost_summary(course) == []
         assert len(library.cost_summary()) == 1
+
+
+# ---------- T3c：讲和资料的 status 读-改-写是原子的 ----------
+
+
+def test_concurrent_status_updates_do_not_lose_steps(tmp_path):
+    db = tmp_path / "lecture.db"
+    with Library(db) as library:
+        course = library.add_course("c", CourseSettings())
+        lecture = library.add_lecture(course, 1, [tmp_path / "a.wav"])
+        store = MaterialStore(library)
+        material = store.add(course, "other", "m", "x")
+    barrier = threading.Barrier(2)
+
+    def write(tag: str) -> None:
+        with Library(db) as library:
+            barrier.wait()
+            for i in range(50):
+                library.set_step(lecture.id, f"{tag}{i}", "done")
+                MaterialStore(library).set_step(material.id, f"{tag}{i}", "done")
+
+    threads = [threading.Thread(target=write, args=(tag,)) for tag in "ab"]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    with Library(db) as library:
+        assert len(library.lecture_by_id(lecture.id).status) == 100
+        assert len(MaterialStore(library).get(material.id).status) == 100
+        with pytest.raises(LibraryError, match="没有编号为 999 的讲"):
+            library.set_step(999, "x", "done")
+        assert not library.conn.in_transaction
