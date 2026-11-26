@@ -89,6 +89,11 @@ def test_foreign_asides_keep_code_intact():
     assert strip_foreign_asides("说明（english note）") == "说明"
     assert strip_foreign_asides("$f(x)$") == "$f(x)$"
     assert strip_foreign_asides("函数 $f(value)$ 表示（meaning）") == "函数 $f(value)$ 表示"
+    # 结束围栏比开栏更长（CommonMark 合法）：代码块原样保留，中间正文的外语旁注正常清理
+    longer_close = "```python\nx = 1\n````\n\n公式 $a*b + c*d$，说明（english note）\n\n```py\ny = 2\n```\n"
+    assert strip_foreign_asides(longer_close) == (
+        "```python\nx = 1\n````\n\n公式 $a*b + c*d$，说明\n\n```py\ny = 2\n```\n"
+    )
 
 
 def test_saved_analysis_has_no_foreign_asides(m1_env):

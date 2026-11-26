@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Literal, Sequence
 
 from ..documents import DocPage
-from ..llm import ImagePart, LLMProvider, ModelProfile, Part, TextPart, Usage, billed_profile
+from ..llm import ImagePart, LLMError, LLMProvider, ModelProfile, Part, TextPart, Usage, billed_profile
 from ..llm.base import Effort
 from ..prompts import load_prompt
 from ..schemas import PageDigest, PageDigestBatch
@@ -46,9 +46,15 @@ def digest_pages(
     usage = Usage()
     for start in range(0, len(pages), batch_size):
         batch = pages[start : start + batch_size]
-        result = provider.generate_structured(
-            _batch_parts(batch, policy, provider.profile.vision), PageDigestBatch, system=system, effort=effort
-        )
+        try:
+            result = provider.generate_structured(
+                _batch_parts(batch, policy, provider.profile.vision), PageDigestBatch, system=system, effort=effort
+            )
+        except LLMError as exc:
+            # 失败时没有 result，只能按调用的档案记下这次已消耗的用量（0 用量跳过）
+            if on_call is not None and exc.usage != Usage():
+                on_call(provider.profile, exc.usage)
+            raise
         usage = usage + result.usage
         if on_call is not None:
             on_call(billed_profile(result, provider.profile), result.usage)

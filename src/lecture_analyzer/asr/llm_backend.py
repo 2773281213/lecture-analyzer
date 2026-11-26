@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 
 from ..course import CourseSettings
 from ..llm import (
-    AudioPart, EmptyResponseError, LLMProvider, ModelProfile, StructuredOutputError, TextPart, Usage, billed_profile,
+    AudioPart, EmptyResponseError, LLMError, LLMProvider, ModelProfile, StructuredOutputError, TextPart, Usage,
+    billed_profile,
 )
 from ..media import encode_mp3, halve_wav, split_wav, wav_duration_ms
 from ..prompts import load_prompt
@@ -116,8 +117,11 @@ class LLMTranscriber(ASRBackend):
         for provider in providers:
             try:
                 lines = self._request(provider, piece)
-            except (EmptyResponseError, StructuredOutputError) as exc:  # 被拦截，或输出两次都在中途被截断
+            except LLMError as exc:
+                # 失败请求（如输出被截断、被拦截、结构化校验失败）已消耗的用量也要记账；0 用量由 _add_usage 跳过
                 self._add_usage(provider.profile, exc.usage)
+                if not isinstance(exc, (EmptyResponseError, StructuredOutputError)):
+                    raise
                 continue
             if unusable(lines, self._source_languages):
                 continue

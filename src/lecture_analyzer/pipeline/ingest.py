@@ -230,13 +230,13 @@ def digest_material(cfg: AppConfig, library: Library, material: Material, report
         futures = [pool.submit(_digest_batch, cfg, folder, batch, subject) for batch in batches]
         for future in as_completed(futures):  # 谁先完成就先落库并回报进度，不被前面慢批次阻塞
             digests, calls = _result_or_error(future, errors)
-            if digests is None:
-                continue
-            store.save_pages(material.id, digests)
-            for used, usage in calls:  # 按实际作答的档案记账（书库连接不能跨线程，所以在主线程写）
+            for used, usage in calls:  # 失败批次已花掉的用量也要记账（书库连接不能跨线程，所以在主线程写）
                 library.log_call(None, "page_digest", used, usage, course_id=material.course_id)
                 models.setdefault(used.model)
                 outcome.usage = outcome.usage + usage
+            if digests is None:
+                continue
+            store.save_pages(material.id, digests)
             outcome.pages += len(digests)
             report(f"「{material.title}」已识别 {len(done) + outcome.pages}/{material.page_count} 页")
     if errors:
@@ -254,9 +254,14 @@ def _digest_batch(cfg: AppConfig, folder: Path, batch: Sequence[int], subject: s
     provider = create_provider(cfg.profile_for_step("page_digest"))
     pages = cached_pages(folder, batch)
     calls: Calls = []
-    digests, _ = digest_pages(provider, pages, subject=subject, batch_size=len(pages),
-                              effort=cfg.effort_for_step("page_digest"),
-                              on_call=lambda used, usage: calls.append((used, usage)))
+    try:
+        digests, _ = digest_pages(provider, pages, subject=subject, batch_size=len(pages),
+                                  effort=cfg.effort_for_step("page_digest"),
+                                  on_call=lambda used, usage: calls.append((used, usage)))
+    except Exception as exc:
+        # 批次失败时把已收集的调用用量挂到异常上带回主线程记账
+        exc.calls = calls  # type: ignore[attr-defined]
+        raise
     return digests, calls
 
 
@@ -265,9 +270,9 @@ def _result_or_error(
 ) -> tuple[list[PageDigest] | None, Calls]:
     try:
         digests, calls = future.result()
-    except Exception as exc:  # 记下错误，先保存其他批次的结果
+    except Exception as exc:  # 记下错误，先保存其他批次的结果，并带出本批已花的用量
         errors.append(exc)
-        return None, []
+        return None, getattr(exc, "calls", [])
     return digests, calls
 
 

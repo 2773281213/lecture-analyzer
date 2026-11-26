@@ -18,16 +18,19 @@ def normalize_zh(text: str) -> str:
     return "".join(ch for ch in text if not unicodedata.category(ch).startswith(_DROP_CATEGORIES))
 
 
-# 围栏代码块（列表里缩进的也算；反引号围栏的信息串不能含反引号、结束行除空白外不能有其他字符）|
+# 围栏代码块（列表里缩进的也算；反引号围栏的信息串不能含反引号、结束围栏长度不短于开栏且后面只有空白）|
 # 行内代码（内容不含反引号，两端反引号串长度相等）。
-# 必须用占有量词，否则一长串反引号会二次方回溯；也不要把代码和公式合进同一个 alternation，
-# 否则正文里孤立的 $ 会吞进后续行内代码里的 $，把代码切碎。
+# CODE 保留作兼容与参考；split_code 改用下方的线性逐行扫描切分围栏，避免大量未闭合开栏行触发平方级回溯。
+# 也不要把代码和公式合进同一个 alternation，否则正文里孤立的 $ 会吞进后续行内代码里的 $，把代码切碎。
 CODE = re.compile(
-    r"^[ \t]*(`{3,}+)[^`\n]*\r?\n.*?^[ \t]*\1[ \t]*\r?$"
-    r"|^[ \t]*(~{3,}+)[^\n]*\r?\n.*?^[ \t]*\2[ \t]*\r?$"
+    r"^[ \t]*(`{3,}+)[^`\n]*\r?\n.*?^[ \t]*\1`*+[ \t]*\r?$"
+    r"|^[ \t]*(~{3,}+)[^\n]*\r?\n.*?^[ \t]*\2~*+[ \t]*\r?$"
     r"|(?<!`)(`++)[^`\n]+?\3(?!`)",
     re.S | re.M,
 )
+_FENCE_OPEN = re.compile(r"^[ \t]*+(?:(`{3,}+)[^`\n]*|(~{3,}+)[^\n]*)\r?\n$")
+_FENCE_CLOSE = re.compile(r"^[ \t]*+(`{3,}+|~{3,}+)[ \t]*+\r?\n?$")
+_INLINE_CODE = re.compile(r"(?<!`)(`++)[^`\n]+?\1(?!`)")
 MATH = re.compile(r"\$\$.+?\$\$|\$[^$\n]+?\$", re.S)
 
 # 括号旁注：（……）或 (……)，不跨行、不嵌套；紧跟在 ] 后面的是 Markdown 链接地址，不算
@@ -74,9 +77,85 @@ def _split_pattern(pattern: re.Pattern[str], text: str) -> list[tuple[str, bool]
     return pieces
 
 
+def _split_lines_keepends(text: str) -> list[str]:
+    """严格按 \\n 切行并保留行尾 \\n（不用 str.splitlines，避免把 \\u2028 等字符误当换行）。"""
+    parts = text.split("\n")
+    lines = [f"{part}\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
 def split_code(text: str) -> list[tuple[str, bool]]:
     """按 Markdown 代码段（围栏代码块与行内代码）切分文本，返回 (片段, 是否代码段) 列表；顺序拼接等于原文。"""
-    return _split_pattern(CODE, text)
+    if not text:
+        return []
+    if "```" not in text and "~~~" not in text:
+        return _split_pattern(_INLINE_CODE, text) if "`" in text else [(text, False)]
+
+    lines = _split_lines_keepends(text)
+    count = len(lines)
+    # 预先逆序统计每行之后反引号/波浪号结束围栏的最大长度：无闭合的开栏行可 O(1) 跳过，整体保持线性时间
+    closes: list[tuple[str, int] | None] = [None] * count
+    max_after_bt = [0] * count
+    max_after_tilde = [0] * count
+    best_bt = 0
+    best_tilde = 0
+    for idx in range(count - 1, -1, -1):
+        max_after_bt[idx] = best_bt
+        max_after_tilde[idx] = best_tilde
+        close_match = _FENCE_CLOSE.match(lines[idx])
+        if close_match is not None:
+            fence = close_match.group(1)
+            char, length = fence[0], len(fence)
+            closes[idx] = (char, length)
+            if char == "`":
+                if length > best_bt:
+                    best_bt = length
+            elif length > best_tilde:
+                best_tilde = length
+
+    if best_bt == 0 and best_tilde == 0:
+        return _split_pattern(_INLINE_CODE, text) if "`" in text else [(text, False)]
+
+    pieces: list[tuple[str, bool]] = []
+    plain: list[str] = []
+
+    def flush_plain() -> None:
+        if not plain:
+            return
+        chunk = "".join(plain)
+        plain.clear()
+        if "`" in chunk:
+            pieces.extend(_split_pattern(_INLINE_CODE, chunk))
+        else:
+            pieces.append((chunk, False))
+
+    idx = 0
+    while idx < count:
+        line = lines[idx]
+        open_match = _FENCE_OPEN.match(line)
+        if open_match is not None:
+            fence = open_match.group(1) or open_match.group(2)
+            char, length = fence[0], len(fence)
+            max_after = max_after_bt[idx] if char == "`" else max_after_tilde[idx]
+            if max_after >= length:
+                end = idx + 1
+                while end < count:
+                    close = closes[end]
+                    if close is not None and close[0] == char and close[1] >= length:
+                        break
+                    end += 1
+                if end < count:
+                    flush_plain()
+                    pieces.append(("".join(lines[idx : end + 1]), True))
+                    idx = end + 1
+                    continue
+        plain.append(line)
+        idx += 1
+
+    flush_plain()
+    return pieces
 
 
 def _strip_asides(text: str, drop: Callable[[str], bool]) -> str:

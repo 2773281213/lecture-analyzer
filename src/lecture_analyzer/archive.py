@@ -320,6 +320,8 @@ def extract_with_tool(archive: Path, target: Path) -> None:
                                    creationflags=NO_WINDOW, check=False)
     except subprocess.TimeoutExpired as exc:
         raise ArchiveError(f"解压超时：{archive.name}") from exc
+    except OSError as exc:
+        raise ArchiveError(f"无法启动解压工具 {command[0]}：{exc}") from exc
     if completed.returncode not in _TOOL_OK:
         output = completed.stderr or completed.stdout
         message = output.decode("oem" if os.name == "nt" else "utf-8", "replace").strip()

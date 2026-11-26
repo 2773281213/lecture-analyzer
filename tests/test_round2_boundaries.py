@@ -6,6 +6,7 @@ import io
 import os
 import struct
 import subprocess
+import time
 import tracemalloc
 import zipfile
 from pathlib import Path
@@ -14,9 +15,11 @@ import pymupdf
 import pytest
 
 from lecture_analyzer import archive, qa_attachments
-from lecture_analyzer.archive import ArchiveError, expand
+from lecture_analyzer.archive import ArchiveError
 from lecture_analyzer.documents import DocPage, load_pages
 from lecture_analyzer.qa_attachments import AttachmentError, read_attachments, save_attachment
+from lecture_analyzer.textnorm import split_code, strip_foreign_asides
+from lecture_analyzer.web.rendering import render_markdown
 
 
 def _junction(link: Path, target: Path) -> None:
@@ -226,6 +229,17 @@ def test_pdf_page_render_respects_max_image_side(tmp_path: Path):
     normal_pix = pymupdf.Pixmap(normal[0].image_png)
     assert (normal_pix.width, normal_pix.height) == (935, 1210)
 
+    # PDF 最大尺寸页面（14400x14400pt）：先按 dpi 渲染再缩小会抛 FzErrorLimit，先降缩放可正常输出
+    huge_path = tmp_path / "超大页面.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=14400, height=14400)
+    doc.save(huge_path)
+    doc.close()
+
+    huge = load_pages(huge_path, tmp_path / "work-huge", max_image_side=1600)
+    huge_pix = pymupdf.Pixmap(huge[0].image_png)
+    assert max(huge_pix.width, huge_pix.height) <= 1600
+
 
 def test_docx_forged_file_size_uses_bounded_memory(tmp_path: Path):
     # 中央目录把 file_size 伪造成 10，实际解压出约 4MB XML：分块读取时峰值内存应远小于整段解压
@@ -253,3 +267,29 @@ def test_find_tool_prefers_bundled_7zip(tmp_path: Path, monkeypatch):
     bundled.unlink()
     fallback = archive.find_tool(".7z")
     assert fallback is not None and fallback[0] == "C:/old/7z.exe"
+
+
+def test_extract_with_tool_wraps_launch_failure(tmp_path: Path, monkeypatch):
+    broken = tmp_path / "7z.exe"
+    broken.write_bytes(b"")
+    monkeypatch.setattr(archive, "BUNDLED_7ZIP", broken)
+    src = tmp_path / "资料.7z"
+    src.write_bytes(b"7z\xbc\xaf\x27\x1c")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    with pytest.raises(ArchiveError, match="无法启动解压工具"):
+        archive.extract_with_tool(src, out)
+
+
+def test_split_code_is_linear_on_unclosed_fences():
+    text = "```js 示例\n" * 8000
+    assert "".join(part for part, _ in split_code(text)) == text
+
+    start = time.perf_counter()
+    render_markdown(text)
+    assert time.perf_counter() - start < 1.0
+
+    start = time.perf_counter()
+    strip_foreign_asides(text)
+    assert time.perf_counter() - start < 1.0

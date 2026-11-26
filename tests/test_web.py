@@ -238,6 +238,10 @@ def test_markdown_leaves_code_and_attributes_alone():
     assert "<em>" not in html and "$a*b + c*d$" in html
     html = str(render_markdown("```a``` $x*y + z*w$\n```b```"))
     assert "<em>" not in html and "$x*y + z*w$" in html
+    # 结束围栏比开栏更长（CommonMark 合法）：不能把后续正文和公式吞进代码块
+    longer_close = "```python\nx = 1\n````\n\n公式 $a*b + c*d$，说明（english note）\n\n```py\ny = 2\n```\n"
+    html = str(render_markdown(longer_close))
+    assert "<em>" not in html and "$a*b + c*d$" in html
 
 
 def test_markdown_placeholder_cannot_collide():

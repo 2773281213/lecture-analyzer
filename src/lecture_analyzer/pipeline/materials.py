@@ -204,7 +204,13 @@ def split_items(
         if items:
             parts.append(TextPart(f"上一批最后一条：{items[-1].label} {snippet(items[-1].content_md, 200)}"))
         parts.append(TextPart(f"请输出第 {batch[0].page_no}–{batch[-1].page_no} 页的题目或条目。"))
-        result = provider.generate_structured(parts, ItemBatch, system=system, effort=effort)
+        try:
+            result = provider.generate_structured(parts, ItemBatch, system=system, effort=effort)
+        except LLMError as exc:
+            # 失败时没有 result，只能按调用的档案记下这次已消耗的用量（0 用量跳过）
+            if on_call is not None and exc.usage != Usage():
+                on_call(provider.profile, exc.usage)
+            raise
         usage = usage + result.usage
         if on_call is not None:
             on_call(billed_profile(result, provider.profile), result.usage)
@@ -248,7 +254,13 @@ def map_items(
         lines = [_item_line(item) for item in batch]
         parts = [TextPart("## 课程知识点\n" + kp_text), TextPart("## 题目或条目\n" + "\n".join(lines)),
                  TextPart("请输出每一条对应的课程知识点。")]
-        result = provider.generate_structured(parts, ItemMappingBatch, system=system, effort=effort)
+        try:
+            result = provider.generate_structured(parts, ItemMappingBatch, system=system, effort=effort)
+        except LLMError as exc:
+            # 失败时没有 result，只能按调用的档案记下这次已消耗的用量（0 用量跳过）
+            if on_call is not None and exc.usage != Usage():
+                on_call(provider.profile, exc.usage)
+            raise
         usage = usage + result.usage
         if on_call is not None:
             on_call(billed_profile(result, provider.profile), result.usage)

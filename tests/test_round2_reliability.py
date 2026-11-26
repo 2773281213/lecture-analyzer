@@ -20,19 +20,23 @@ from lecture_analyzer.config import load_config
 from lecture_analyzer.course import CourseSettings
 from lecture_analyzer.job_runner import JobRunner, RunnerLock, log_path
 from lecture_analyzer.jobs import JobStore
+from lecture_analyzer.knowledge import KnowledgePoint
 from lecture_analyzer.library import Library, LibraryError
-from lecture_analyzer.llm import ContentBlockedError, FallbackProvider, LLMError, ModelProfile, RefusalError, Usage
+from lecture_analyzer.llm import (
+    ContentBlockedError, FallbackProvider, LLMError, ModelProfile, RefusalError, StructuredOutputError, Usage,
+)
 from lecture_analyzer.llm.base import extract_json_text
-from lecture_analyzer.materials import MaterialStore
+from lecture_analyzer.materials import MaterialItem, MaterialStore
 from lecture_analyzer.media import MediaError, encode_mp3, extract_audio
 from lecture_analyzer.pipeline import ingest, organize
 from lecture_analyzer.pipeline import materials as materials_module
 from lecture_analyzer.pipeline import run as run_module
 from lecture_analyzer.pipeline.run import LectureRunner
+from lecture_analyzer.schemas import PageDigest
 
 from .conftest import FakeProvider, make_profile, make_wav
 from .test_jobs import STUB, wait_for
-from .test_material_items import _item, _items_json
+from .test_material_items import MOCK, _item, _items_json
 from .test_materials import _digest_json, _pdf
 from .test_pipeline_run import _run
 
@@ -274,6 +278,78 @@ def test_material_steps_bill_fallback_profile(m1_env, monkeypatch):
         assert all_material_rows == [{"model": "gpt-x", "input_tokens": 17}, {"model": "gpt-x", "input_tokens": 17}]
         map_detail = store.get(material.id).status["kp_map"]["detail"]
         assert "gpt-x" in map_detail and "claude-x" not in map_detail
+
+
+def test_transcriber_logs_usage_of_failed_request(tmp_path: Path):
+    wav = make_wav(tmp_path / "trunc.wav", 2)
+    profile = make_profile(name="gemini", model="gemini-audio", audio=True)
+    provider = FakeProvider([LLMError("输出达到 max_output_tokens 被截断", Usage(1000, 16000))], profile)
+    transcriber = LLMTranscriber(provider, tmp_path / "work", chunk_minutes=10)
+    logged: list[tuple[ModelProfile, Usage]] = []
+    transcriber.on_usage = lambda prof, usage: logged.append((prof, usage))
+
+    with pytest.raises(LLMError, match="被截断"):
+        transcriber.transcribe(wav)
+    assert logged == [(profile, Usage(1000, 16000))]
+
+
+def test_material_steps_log_usage_of_failed_batch(m1_env, monkeypatch):
+    # 1. split_items 第 2 批结构化输出失败：on_call 应收到第 1 批成功 + 第 2 批失败（20/10）
+    monkeypatch.setattr(materials_module, "ITEMS_BATCH_CHARS", 10)
+    pages = [PageDigest(page_no=n, title="", content_md=f"第{n}页的题目内容", terms=[]) for n in (1, 2)]
+    mat_profile = make_profile(name="mat", model="mat-model")
+    split_calls: list[tuple[ModelProfile, Usage]] = []
+    split_provider = FakeProvider(
+        [_items_json([]), StructuredOutputError("两次校验均失败", Usage(20, 10))], mat_profile
+    )
+    with pytest.raises(StructuredOutputError):
+        materials_module.split_items(
+            split_provider, MOCK, pages, "药理学", on_call=lambda prof, usage: split_calls.append((prof, usage))
+        )
+    assert split_calls == [(mat_profile, Usage(10, 5)), (mat_profile, Usage(20, 10))]
+
+    # 2. map_items 失败时也记下失败那次消耗的用量
+    kp = KnowledgePoint(key=1, name="阿司匹林的剂量分段", chapter="总论", aliases=(), appearances=())
+    item = MaterialItem(label="1", item_type="short", content_md="题干", score=10, answer_md="", pages=[1],
+                        id=101, material_id=7, idx=1)
+    map_calls: list[tuple[ModelProfile, Usage]] = []
+    map_provider = FakeProvider([LLMError("输出被截断", Usage(30, 40))], mat_profile)
+    with pytest.raises(LLMError, match="输出被截断"):
+        materials_module.map_items(
+            map_provider, [kp], [item], "药理学", MOCK, on_call=lambda prof, usage: map_calls.append((prof, usage))
+        )
+    assert map_calls == [(mat_profile, Usage(30, 40))]
+
+    # 3. digest_material 某批失败时，该批已消耗的用量写入 llm_call，步骤记为 failed
+    m1_env.cfg.materials.digest_batch = 1
+    m1_env.cfg.materials.digest_workers = 1
+    digest_profile = make_profile(name="dig", model="dig-model", vision=True)
+    m1_env.cfg.models["dig"] = digest_profile
+    m1_env.cfg.steps["page_digest"] = "dig"
+
+    pdf = _pdf(m1_env.tmp_path / "两页资料.pdf", pages=2, text="药理学内容")
+    batch_responses = [[_digest_json([1])], [StructuredOutputError("格式校验失败", Usage(20, 10))]]
+
+    def fake_digest_provider(prof: ModelProfile) -> FakeProvider:
+        return FakeProvider(batch_responses.pop(0), prof)
+
+    monkeypatch.setattr(ingest, "create_provider", fake_digest_provider)
+    with Library(m1_env.cfg.data_dir / "lecture.db") as library:
+        course = library.course_by_id(m1_env.course_id)
+        store = MaterialStore(library)
+        material = ingest.import_materials(
+            library, m1_env.cfg.data_dir, course, [pdf], "slides", report=lambda _: None
+        ).materials[0]
+        with pytest.raises(StructuredOutputError, match="格式校验失败"):
+            ingest.digest_material(m1_env.cfg, library, material, report=lambda _: None)
+        assert store.get(material.id).step_state("digest") == "failed"
+        rows = [
+            (row["model"], row["input_tokens"], row["output_tokens"])
+            for row in library.conn.execute(
+                "SELECT model, input_tokens, output_tokens FROM llm_call WHERE step = 'page_digest' ORDER BY id"
+            )
+        ]
+        assert sorted(rows) == [("dig-model", 10, 5), ("dig-model", 20, 10)]
 
 
 # ---------- 补齐上一轮测试缺口 ----------
