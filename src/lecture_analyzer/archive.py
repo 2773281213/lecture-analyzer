@@ -5,7 +5,7 @@
 - rar、7z 调用 7-Zip（安装版随附在 tools\7zip，也找本机装的）或 WinRAR（UnRAR.exe）；都没有时提示先手动解压。
 - 同一文件夹里的图片（例如拍下的几页试卷）合成一份资料；单独给出的几张图片也合成一份。
 - 安全：压缩包里的路径一律去掉盘符和 ".."，只保留在暂存目录之内；限制文件数和解压后的总大小；
-  不跟随符号链接；有密码的压缩包直接报错，不会等待输入密码。
+  不跟随符号链接和目录联接点；有密码的压缩包直接报错，不会等待输入密码。
 """
 
 from __future__ import annotations
@@ -97,11 +97,15 @@ def natural_key(text: str) -> list[tuple[int, Any]]:
 # ---------- 展开 ----------
 
 
+def _is_link(path: Path) -> bool:
+    return path.is_symlink() or path.is_junction()
+
+
 def expand(inputs: Sequence[Path], staging: Path) -> Expanded:
     """把输入展开成文档列表（按输入顺序，文件夹和压缩包内按自然顺序）。压缩包解压到 staging 下。"""
     result = Expanded()
     loose_images = [
-        item for item in inputs if item.is_file() and not item.is_symlink() and item.suffix.lower() in IMAGE_SUFFIXES
+        item for item in inputs if item.is_file() and not _is_link(item) and item.suffix.lower() in IMAGE_SUFFIXES
     ]
     for index, item in enumerate(inputs, start=1):
         if item not in loose_images:
@@ -114,8 +118,8 @@ def expand(inputs: Sequence[Path], staging: Path) -> Expanded:
 def _expand_item(item: Path, label: str | None, staging: Path, result: Expanded, depth: int) -> None:
     """label：压缩包里的条目显示为「压缩包!内部路径」；None 表示本机上的文件，显示完整路径。"""
     source = label or str(item)
-    if item.is_symlink():
-        result.skipped.append((source, "符号链接，已跳过"))
+    if _is_link(item):
+        result.skipped.append((source, "符号链接或目录联接点，已跳过"))
     elif item.is_dir():
         _expand_folder(item, label, item.name, staging, result, depth)
     elif not item.is_file():
@@ -133,7 +137,7 @@ def _expand_folder(folder: Path, label: str | None, name: str, staging: Path, re
         if child.name.lower() in _IGNORED_NAMES or child.name.startswith(("~$", "._")):
             continue
         child_label = _child_label(label, child)
-        if child.is_file() and not child.is_symlink() and child.suffix.lower() in IMAGE_SUFFIXES:
+        if child.is_file() and not _is_link(child) and child.suffix.lower() in IMAGE_SUFFIXES:
             images.append((child, child_label))
             continue
         _expand_item(child, child_label if label is not None else None, staging / str(index), result, depth)
@@ -194,10 +198,16 @@ def extract_zip(archive: Path, target: Path) -> list[str]:
                 if relative is None:
                     continue
                 destination = target / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                # 按实际解压出的字节数实时限流，防止伪造 file_size 的 zip bomb 写满磁盘
-                with zf.open(info) as src, destination.open("wb") as dst:
-                    total_written = _copy_limited(src, dst, total_written, archive)
+                try:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    # 按实际解压出的字节数实时限流，防止伪造 file_size 的 zip bomb 写满磁盘
+                    with zf.open(info) as src, destination.open("wb") as dst:
+                        total_written = _copy_limited(src, dst, total_written, archive)
+                except OSError as exc:
+                    raise ArchiveError(
+                        f"无法解出压缩包里的「{relative.as_posix()}」（可能与同名文件夹冲突或路径过长）："
+                        f"{archive.name}"
+                    ) from exc
                 written.append(relative.as_posix())
             return written
     except ArchiveError:
@@ -313,19 +323,17 @@ def extract_with_tool(archive: Path, target: Path) -> None:
 
 
 def _check_extracted(target: Path, archive: Path) -> None:
-    """外部工具解出的内容：去掉符号链接、目录联接点和跑出暂存目录的条目，并检查总量。"""
-    root = target.resolve()
+    """外部工具解出的内容：删掉符号链接和目录联接点（只删链接本身、绝不进入），并检查总量。"""
     count, total = 0, 0
-    for path in list(target.rglob("*")):
-        if not path.exists() and not path.is_symlink():
-            continue
-        is_junction = path.is_junction() if hasattr(path, "is_junction") else False
-        if path.is_symlink() or is_junction or not path.resolve().is_relative_to(root):
-            if is_junction or (path.is_dir() and not path.is_symlink()):
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                path.unlink(missing_ok=True)
-        elif path.is_file():
-            count += 1
-            total += path.stat().st_size
+    stack = [target]
+    while stack:
+        with os.scandir(stack.pop()) as entries:
+            for entry in entries:
+                if entry.is_symlink() or entry.is_junction():
+                    Path(entry.path).unlink(missing_ok=True)  # Windows 上对 junction / 目录符号链接也只删链接
+                elif entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    count += 1
+                    total += entry.stat(follow_symlinks=False).st_size
     _check_limits(count, total, archive)
