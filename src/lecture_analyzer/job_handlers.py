@@ -215,6 +215,8 @@ def _qa(cfg: AppConfig, library: Library, job: Job, report: Report) -> dict[str,
     thread = int(params["thread"])
     result = answer_question(cfg, library, course, params["question"], lecture, store.thread(course, thread), report,
                              attachments=attachments)
+    if JobStore(library).get(job.id).state != "running":  # 回答期间被取消或暂停（例如对话已被删除）：不写回
+        return {"url": f"/courses/{course.id}/qa"}
     turn_id = store.add(course, lecture.id if lecture else None, thread, result["question"], result,
                         list(result["models"].values()))
     return {"url": f"/courses/{course.id}/qa?thread={thread}#qa-{turn_id}", "turn_id": turn_id}

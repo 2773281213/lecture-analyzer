@@ -6,12 +6,20 @@ import threading
 
 import pytest
 
+from lecture_analyzer.conversations import QAStore
 from lecture_analyzer.course import CourseSettings
+from lecture_analyzer.job_handlers import run_job
+from lecture_analyzer.jobs import JobStore
 from lecture_analyzer.library import Library, LibraryError, PageRef
 from lecture_analyzer.llm import ModelProfile, Usage
 from lecture_analyzer.materials import MaterialStore
+from lecture_analyzer.pipeline import qa as qa_module
 from lecture_analyzer.pipeline.organize import move_lecture
+from lecture_analyzer.qa_attachments import mark_used, save_attachment
 from lecture_analyzer.schemas import PageDigest
+
+from .test_web import _post
+from .test_web_analysis import _client
 
 
 def _db(env):
@@ -109,3 +117,49 @@ def test_concurrent_status_updates_do_not_lose_steps(tmp_path):
         with pytest.raises(LibraryError, match="没有编号为 999 的讲"):
             library.set_step(999, "x", "done")
         assert not library.conn.in_transaction
+
+
+# ---------- T3a：删除对话时取消没答完的问题，任务取消后不再写回 ----------
+
+
+def test_deleting_a_thread_cancels_its_questions_and_removes_their_attachments(m1_env):
+    client = _client(m1_env)
+    data_dir = m1_env.cfg.data_dir
+    with Library(_db(m1_env)) as library:
+        course = library.course_by_id(m1_env.course_id)
+        queued_file = save_attachment(data_dir, course.id, "q.txt", b"q")
+        failed_file = save_attachment(data_dir, course.id, "f.txt", b"f")
+        for item in (queued_file, failed_file):
+            mark_used(data_dir, item)
+        QAStore(library).add(course, None, 1, "第一问", {"question": "第一问", "answer_md": "答"}, [])
+        store = JobStore(library)
+        queued = store.add(course, "qa", {"thread": 1, "question": "第二问", "lecture_id": None,
+                                          "attachments": [queued_file.summary()]})
+        failed = store.add(course, "qa", {"thread": 1, "question": "第三问", "lecture_id": None,
+                                          "attachments": [failed_file.summary()]})
+        store.start(failed.id)
+        store.fail(failed.id, "LLMError")
+        other = store.add(course, "qa", {"thread": 2, "question": "别的对话", "lecture_id": None})
+    assert _post(client, f"/courses/{m1_env.course_id}/qa/1/delete").status_code == 303
+    with Library(_db(m1_env)) as library:
+        store = JobStore(library)
+        assert store.get(queued.id).state == "cancelled" and store.get(other.id).state == "queued"
+    assert not queued_file.path.parent.exists() and not failed_file.path.parent.exists()
+
+
+def test_answer_finished_after_cancel_is_not_written_back(m1_env, monkeypatch):
+    db = _db(m1_env)
+    with Library(db) as library:
+        course = library.course_by_id(m1_env.course_id)
+        job = JobStore(library).add(course, "qa", {"thread": 1, "question": "问", "lecture_id": None})
+
+    def answer(cfg, library, course, question, lecture, history, report, attachments=()):
+        JobStore(library).cancel(job.id)  # 回答期间对话被删除、任务被取消
+        return {"question": question, "answer_md": "迟到的回答", "models": {"qa": "fake"}}
+
+    monkeypatch.setattr(qa_module, "answer_question", answer)
+    run_job(m1_env.cfg, db, job.id)
+    with Library(db) as library:
+        course = library.course_by_id(m1_env.course_id)
+        assert QAStore(library).thread(course, 1) == []
+        assert JobStore(library).get(job.id).state == "cancelled"

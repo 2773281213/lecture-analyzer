@@ -159,7 +159,13 @@ async def delete_thread(request: Request, course_id: int, thread: int) -> Redire
         course = library.course_by_id(course_id)
         store = QAStore(library)
         turns = store.thread(course, thread)
-        store.delete_thread(course, thread)
-    for turn in turns:
-        discard_saved(request.app.state.cfg.data_dir, course_id, turn.result.get("attachments"))
+        jobs = [job for job in JobStore(library).of_kind(course, "qa") if job.params.get("thread") == thread]
+    for job in jobs:  # 还没答完的问题一并取消：答完后不会再把这段对话写回来
+        if not job.finished:
+            request.app.state.jobs.cancel(job.id)
+    with library_of(request) as library:
+        QAStore(library).delete_thread(library.course_by_id(course_id), thread)
+    data_dir = request.app.state.cfg.data_dir
+    for saved in [turn.result.get("attachments") for turn in turns] + [job.params.get("attachments") for job in jobs]:
+        discard_saved(data_dir, course_id, saved)
     return redirect(f"/courses/{course_id}/qa")
