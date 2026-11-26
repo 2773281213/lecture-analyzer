@@ -1,7 +1,7 @@
 # lecture-analyzer 代码评审与改进方案
 
 > 评审基准分支：`master`（版本 `0.3.5`，提交 `37cb789`）  
-> 改进分支：`improve/review-2026-11`
+> 改进分支：第一轮 `improve/review-2026-11`；第二轮 `improve/round2-2026-11-25`
 
 ---
 
@@ -106,13 +106,92 @@
 
 ---
 
-## 四、留待后续的改进项与原因
+## 四、第一轮留待后续的改进项与当前状态
 
-| 编号 | 改进项 | 暂缓原因 |
+| 编号 | 改进项 | 第二轮状态 | 说明 / 暂缓原因 |
+| --- | --- | --- | --- |
+| P3-1 | SQLite 补齐外键/查询二级索引 | 仍暂缓 | 涉及递增 `user_version` 与数据库迁移备份，应与下一次功能性表结构变更合并发布，避免无必要的迁移版本膨胀。 |
+| P3-2 | 大模块拆分与公共工具去重 | 仍暂缓 | 属于结构性重构，改动面广且短期不直接修复缺陷，留待专项重构 PR 避免与缺陷修复混杂。 |
+| P3-3 | 删对话取消在途问答任务、`set_pages` 加锁与资料步骤拒答计费 | **已全部落地** | 已在第二轮分别落地（`9749e9e`、`c15b2c6`、`0916ddd`、`1a3c3f0`），并补充并发与回退/失败计费测试。 |
+| P3-4 | Markdown 代码块保护、本地化 KaTeX、`/api/*` 统一 JSON 错误 | **部分落地** | 代码段/属性保护、围栏线性扫描与 `/api/*` JSON 错误已在第二轮落地（`6ecb38a`、`6dce815`、`1a3c3f0`）；KaTeX 与 Google Fonts 本地化涉及引入前端静态资产及许可证声明，留待后续专项处理。 |
+| P3-5 | 大模型转写 `.mp3`/缓存原子落盘与 `raw_decode` JSON 抽取 | **已落地** | `extract_audio`/`encode_mp3` 原子落盘与 `extract_json_text` 抗花括号干扰已在第二轮落地（`91f3f00`）；切片缓存 JSON 读回已捕获 `ValueError` 容错，无需改造。 |
+| P3-6 | 清理或参数化 `packaging/upload_release_asset.py` | 仍暂缓 | 属于维护者个人发布辅助脚本，删改前应由仓库维护者确认是否仍在本地使用。 |
+
+---
+
+## 五、第二轮改进记录（`improve/round2-2026-11-25`）
+
+> 基准提交：`0458b50`（第一轮 `improve/review-2026-11` 末端）  
+> 涵盖提交：`9cd7c23` ~ `1a3c3f0`（共 13 个功能与收口提交，修改 30 个文件）  
+> 执行情况：方案讨论由 Antigravity（gemini-4-neon xhigh）完成；第一批由 DeepSeek Harness 实施；第二批中因 DeepSeek Harness 不可用，T8 由 DeepSeek 写完后统筹方代为提交，T6/T7/T9/T10/T11 由 Antigravity 执行会话完成；统筹方（Claude）负责核验、review 与合入。
+
+### 5.1 已落地改进（按功能域）
+
+1. **压缩包与解压安全加固**（`9cd7c23`、`6dce815`、`1a3c3f0`）
+   - `src/lecture_analyzer/archive.py`：
+     - 修复上一轮引入的 P0 回归：`_check_extracted` 改用 `os.scandir` 栈式遍历，先判 `entry.is_symlink() or entry.is_junction()` 并用 `Path.unlink(missing_ok=True)` 只删链接本身、绝不穿透进入 Windows 目录联接点（junction），同时移除原先会误删外部文件的 `resolve().is_relative_to` + `shutil.rmtree` 分支；
+     - `expand` / `_expand_item` / `_expand_folder` 统一用 `_is_link` 跳过符号链接与目录联接点（同时消除指向祖先目录的环路重复导入）；
+     - `extract_zip` 按条目将目录/文件同名冲突与路径过长抛出的 `OSError` 包装为 `ArchiveError`；
+     - `find_tool` 优先使用安装包随附的 `BUNDLED_7ZIP`（`tools\7zip\7z.exe`），避免被用户 PATH 中旧版 7-Zip 覆盖；
+     - `extract_with_tool` 捕获启动外部工具时的 `OSError` 并转为友好 `ArchiveError`（提示无法启动解压工具，且不自动回退系统旧版 7-Zip）。
+   - 回归测试：`tests/test_round2_boundaries.py`（`test_check_extracted_removes_junction_without_touching_external`、`test_expand_archive_junction_end_to_end`、`test_expand_skips_junctions_in_folder`、`test_extract_zip_wraps_file_dir_collision_as_archive_error`、`test_find_tool_prefers_bundled_7zip`、`test_extract_with_tool_wraps_launch_failure`）。
+
+2. **问答附件与 PDF 页面渲染资源上限**（`97d954b`、`9cf38c6`、`1a3c3f0`）
+   - `src/lecture_analyzer/documents.py`、`src/lecture_analyzer/qa_attachments.py`：
+     - 抽取 `documents.render_page_png`，在渲染 PDF 页面前先按 `max_side` 夹紧缩放再渲染，`iter_pages` 与 `qa_attachments._page_png` 共用，避免超大页面先分配数百 MB 像素图或触发 `FzErrorLimit`；
+     - `_read_pdf` 与 `_read_legacy_office` 先判断是否需要附图，图片额度耗尽或部分耗尽时正确置 `truncated = True`，纯扫描 PDF 不再误报“没有可读取的内容”；
+     - `_read_docx` / `_read_pptx` 统一通过 `_read_xml_member` 读取 XML，先校验中央目录 `file_size <= MAX_XML_BYTES`（20 MB）再以 64 KB 分块限流读出，防止高压缩比或伪造小 `file_size` 的压缩炸弹撑爆内存。
+   - 回归测试：`tests/test_round2_boundaries.py`（`test_scanned_pdf_attachment_marks_truncated_when_image_budget_exhausted`、`test_legacy_office_marks_truncated_without_office`、`test_docx_and_pptx_reject_oversized_xml_member`、`test_pdf_page_render_respects_max_image_side`（加强覆盖 14400×14400pt 最大页面尺寸）、`test_docx_forged_file_size_uses_bounded_memory`）。
+
+3. **数据一致性、并发原子性与跨进程锁补齐**（`18aaf96`、`6020565`、`9749e9e`、`c15b2c6`、`4b731c9`、`9cf38c6`）
+   - `src/lecture_analyzer/pipeline/organize.py`、`src/lecture_analyzer/library.py`：
+     - 跨课移动讲时清空原课程的 `lecture_page`（含手动指定页）并无条件重置 `slides` 步骤；
+     - 删除讲时保留课程账面费用（`course_id = COALESCE(course_id, ?), lecture_id = NULL`），删除课程时解绑课/讲级 `llm_call`，新增课/讲时解绑旧库遗留的孤儿 `llm_call`，避免 SQLite 复用自增编号导致费用串账。
+   - `src/lecture_analyzer/library.py`、`src/lecture_analyzer/materials.py`：
+     - 新增 `Library.immediate()`，以 `BEGIN IMMEDIATE` 保护讲与资料的 `status` 读-改-写，消除多进程/多连接并发更新丢写，同时保持原有即时提交语义并在 docstring 中明确说明。
+   - `src/lecture_analyzer/web/qa_page.py`、`src/lecture_analyzer/job_handlers.py`：
+     - 删除问答对话时通过统一的 `_job_thread` 找出并取消该对话尚未结束的 `qa` 任务，同步清理已答轮次及排队/失败任务的附件；`job_handlers._qa` 在写回前复核任务仍为 `running`，避免已删对话被迟到结果复活。
+   - `src/lecture_analyzer/web/manage_lectures.py`、`src/lecture_analyzer/cli_materials.py`、`src/lecture_analyzer/pipeline/organize.py`：
+     - 网页 `set_pages` 与命令行 `lec lecture pages` 写分支补齐 `lecture_lock`；
+     - `delete_course` 按 `locks.py` 顺序（且讲/资料按 `id` 升序）加齐 `lecture_lock`、`material_lock`、`materials_lock`、`memory_lock` 后再复查讲与资料集合，拦截命令行并发处理及等锁期间新导入资料导致的磁盘残留。
+   - 回归测试：`tests/test_round2_consistency.py`（共 10 个测试函数 / 11 个用例）。
+
+4. **Markdown / 文本清理代码段保护与 Web 安全边界**（`6ecb38a`、`9cf38c6`、`6dce815`、`1a3c3f0`）
+   - `src/lecture_analyzer/textnorm.py`、`src/lecture_analyzer/web/rendering.py`：
+     - 在 `textnorm.py` 中统一提供 `CODE`、`MATH` 与 `split_code`，由 `textnorm._strip_asides` 与 `web/rendering.render_markdown` 共用；
+     - 围栏识别符合 CommonMark（兼容 CRLF、反引号信息串不含反引号、结束围栏长度允许不短于开栏且行尾仅有空白），`split_code` 改为逆序预统计后续结束围栏最大长度的线性逐行扫描，对大量未闭合开栏行保持 O(n) 复杂度，围栏之外再用 `_INLINE_CODE` 切出行内代码；
+     - `strip_foreign_asides` / `strip_citations` 不再破坏围栏代码块里的函数参数或受孤立 `$` 跨反引号影响；
+     - `render_markdown` 改用每次调用随机 8 位十六进制 `nonce` 占位符（不含 `:` 等行内终止符以保性能），`_fix_leftover_bold` 跳过 HTML 标签属性与 `<code>` 内文本。
+   - `src/lecture_analyzer/web/app.py`：
+     - `/api/*` 路径上的 `LibraryError` 与 `StarletteHTTPException` 统一返回 JSON `{"error": ...}`（保留 405 `Allow` 等响应头）；
+     - `/media/{lecture_id}/{part}` 仅对 `audio/*`、`video/*` 保留原 MIME，其余误登记文件（如 `.html`、`.svg`）一律降级为 `application/octet-stream` 并附带 `X-Content-Type-Options: nosniff`。
+   - 回归测试：`tests/test_web.py`（新增 `test_media_never_served_as_html`、`test_api_errors_are_json`、`test_markdown_leaves_code_and_attributes_alone`、`test_markdown_placeholder_cannot_collide`）、`tests/test_foreign_language.py`（新增 `test_foreign_asides_keep_code_intact`）、`tests/test_round2_boundaries.py`（新增 `test_split_code_is_linear_on_unclosed_fences`）。
+
+5. **音视频原子写、大模型计费精确化、执行器与锁健壮性及测试补齐**（`91f3f00`、`0916ddd`、`1a3c3f0`）
+   - `src/lecture_analyzer/media.py`：`extract_audio` 与 `encode_mp3` 共用 `_ffmpeg_to`（固定 `<stem>.partial<suffix>` 临时文件 + `os.replace`），进程被强杀不再留下被永久复用的半截音频。
+   - `src/lecture_analyzer/asr/base.py`、`src/lecture_analyzer/asr/llm_backend.py`、`src/lecture_analyzer/asr/fallback.py`、`src/lecture_analyzer/pipeline/run.py`：
+     - `ASRBackend` 新增 `on_usage` 钩子，`LLMTranscriber` 每次非 0 用量请求后立即回调记账（按 `billed_profile`），中途失败或进程被强杀不丢账；`_request_any` 统一捕获 `LLMError`，将输出截断等普通失败请求消耗的用量同样计入 `usage_by_model` 并回调 `on_usage` 后原样抛出；
+     - `fill_skipped` 透传 `on_usage`（补齐 `llm:<档案>` 补转记账）并捕获 `(RuntimeError, ConfigError)`。
+   - `src/lecture_analyzer/llm/base.py`：`extract_json_text` 在首个 `\{[ \t\r\n]*"` 处尝试 `raw_decode`（捕获 `ValueError` / `RecursionError`），容忍前后说明文字里的花括号，同时对截断 JSON 与超深嵌套保持原有回退与重试行为。
+   - `src/lecture_analyzer/pipeline/page_digest.py`、`src/lecture_analyzer/pipeline/ingest.py`、`src/lecture_analyzer/pipeline/materials.py`：
+     - 资料逐页识别、拆题、对应知识点三步通过可选 `on_call` 回调按实际作答的 `billed_profile` 记账并记录真实模型名（不改变二元组返回契约）；
+     - `split_items`、`map_items`、`digest_pages` 在 `generate_structured` 抛带非 0 用量的 `LLMError` 时按调用档案回调 `on_call`；`ingest._digest_batch` 将失败批次已收集的用量挂到异常上带回主线程，由 `digest_material` 先记账再跳过落页。
+   - `src/lecture_analyzer/job_runner.py`、`src/lecture_analyzer/locks.py`：`JobRunner.start()` 在 `pause_interrupted()` 失败时释放 `_owner_lock`，`_run()` 未启动子进程时清理 0 字节空日志；`locks._lock_file` 分拆 `open` 与 `lock_file` 并为打开失败设置 `OPEN_RETRY_SECONDS = 10.0` 上限。
+   - 回归测试：`tests/test_round2_reliability.py`（共 15 个测试函数，含 T6/T7 验收、失败请求用量记账 `test_transcriber_logs_usage_of_failed_request` / `test_material_steps_log_usage_of_failed_batch` 与第一轮 P0-1/P0-3/P0-4 缺口补齐）、`tests/test_review_fixes.py`（加强 `test_locks_release_in_process_guard_on_open_error_and_retry_permission` 覆盖重试循环与 `sleep`）。
+
+### 5.2 第二轮测试统计
+
+- 验证命令：`uv run pytest -m "not office" -q -p no:cacheprovider`
+- 测试结果：**514 passed, 9 skipped, 2 deselected**（较第一轮基线 `471 passed, 9 skipped, 2 deselected` 净增 43 个回归用例）。
+
+### 5.3 第二轮结束后仍留待后续的项目
+
+| 编号 / 来源 | 项目 | 暂缓理由 |
 | --- | --- | --- |
-| P3-1 | SQLite 补齐外键/查询二级索引 | 涉及递增 `user_version` 与数据库迁移备份，应与下一次功能性表结构变更合并发布，避免无必要的迁移版本膨胀。 |
-| P3-2 | 大模块拆分与公共工具去重 | 属于结构性重构，改动面广且短期不直接修复缺陷，留待专项重构 PR 避免与缺陷修复混杂。 |
-| P3-3 | 删对话取消在途问答任务、`set_pages` 加锁与资料步骤拒答计费 | 涉及调整 `JobRunner` 取消联动与资料流水线返回契约，影响面较大，建议单独设计和补充并发集成测试。 |
-| P3-4 | Markdown 代码块保护、本地化 KaTeX、`/api/*` 统一 JSON 错误 | 引入静态前端资产或改动公共异常处理器可能改变现有模板渲染与错误断言，需结合前端构建规范统一推进。 |
-| P3-5 | 大模型转写 `.mp3`/缓存原子落盘与 `raw_decode` JSON 抽取 | 需要针对多模型输出样例（含代码块与嵌套文本）做回归验证，避免放宽或收紧既有 JSON 提取行为。 |
-| P3-6 | 清理或参数化 `packaging/upload_release_asset.py` | 属于维护者个人发布辅助脚本，删改前应由仓库维护者确认是否仍在本地使用。 |
+| P3-1 | SQLite 二级索引（`signal`、`llm_call`、`kp_signal`、`lecture_page`、`report`、`job`） | 需递增 `user_version = 6` 并触发书库备份迁移，留待下一次功能性表结构变更合并实施。 |
+| P3-2 | 大模块拆分与公共工具去重（`web/views.py`、`pipeline/review.py`、`library.py`、`cli.py`、`web/static/app.js`、重复 `_now()`） | 纯结构性重构，留待专项 PR，避免与缺陷修复混杂。 |
+| P3-4（剩余） | KaTeX 与 Google Fonts 本地静态化（离线渲染与去外部 CDN 依赖） | 涉及引入前端静态资产与 `packaging/notices.py` 头部许可证维护，需结合桌面打包专项推进。 |
+| P3-6 | 清理或参数化 `packaging/upload_release_asset.py` | 个人发布辅助脚本，需仓库维护者确认是否仍在本地使用。 |
+| 已知局限 | `extract_lecture` 多窗口部分回退、`FallbackProvider` 拒答输入与备用输出按备用单价混算 | 计费偏差极小且仅在拒答回退时触发，保持单条汇总逻辑简洁，后续如细化账单再拆分。 |
+| 已知局限 | `FallbackProvider` 中备用档案也失败时的记账归属与主模型拒答用量合并 | 主模型拒答后若备用档案也失败，异常上的用量按主档案记账且主模型拒答那次的用量未并入（需调整 `src/lecture_analyzer/llm/fallback.py` 与异常契约，留待后续计费细化）。 |
+| 后续观察 | 图片附件与资料图片（`qa_attachments._image_file_png` / `documents._load_image_png`）解码前校验像素数上限 | 单机本地场景已有 50 MB 附件上限，且 PyMuPDF 单图文档不直接暴露原始像素宽高，需自写 PNG/JPEG/BMP 头部解析，收益风险比不高，先作观察项。 |
