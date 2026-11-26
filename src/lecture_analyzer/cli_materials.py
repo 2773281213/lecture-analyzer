@@ -15,6 +15,7 @@ from rich.table import Table
 
 from .cli_common import ConfigOption, console, friendly_errors, load_cfg, open_library, progress
 from .library import SLIDES_LABELS, LibraryError
+from .locks import hold, lecture_lock
 from .materials import MATERIAL_KINDS, MaterialStore
 
 material_app = typer.Typer(help="管理课程资料：课件、教材、往年真题、模拟题、复习提纲……", no_args_is_help=True)
@@ -153,16 +154,15 @@ def lecture_pages(
         lecture = library.lecture(target, seq)
         store = MaterialStore(library)
         materials = store.list(target)
-        if pages is not None:
+        if pages is not None or auto:  # 先在锁外解析，写的时候和后台任务互斥
             try:
-                refs = parse_page_spec(pages, materials)
+                refs = parse_page_spec(pages, materials) if pages is not None else []
             except ValueError as exc:
                 raise LibraryError(str(exc)) from None
-            store.set_lecture_pages(lecture.id, refs, "manual")
-            library.reset_steps(lecture.id, ["slides"])
-        elif auto:
-            store.set_lecture_pages(lecture.id, [], "auto")
-            library.reset_steps(lecture.id, ["slides"])
+            busy = f"第 {seq} 讲正在后台处理，请等这一讲处理完再修改课件页"
+            with hold(lecture_lock(cfg.data_dir, lecture.id), wait=0, busy=busy):
+                store.set_lecture_pages(lecture.id, refs, "manual" if pages is not None else "auto")
+                library.reset_steps(lecture.id, ["slides"])
         current = store.lecture_pages(lecture.id)
     titles = {m.id: m.title for m in materials}
     how = "手动指定" if current and current[0].source == "manual" else "自动匹配"

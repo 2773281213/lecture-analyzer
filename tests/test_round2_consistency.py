@@ -5,19 +5,23 @@ from __future__ import annotations
 import threading
 
 import pytest
+from typer.testing import CliRunner
 
+from lecture_analyzer.cli import app as cli_app
 from lecture_analyzer.conversations import QAStore
 from lecture_analyzer.course import CourseSettings
 from lecture_analyzer.job_handlers import run_job
 from lecture_analyzer.jobs import JobStore
 from lecture_analyzer.library import Library, LibraryError, PageRef
 from lecture_analyzer.llm import ModelProfile, Usage
+from lecture_analyzer.locks import lecture_lock, memory_lock
 from lecture_analyzer.materials import MaterialStore
 from lecture_analyzer.pipeline import qa as qa_module
-from lecture_analyzer.pipeline.organize import move_lecture
+from lecture_analyzer.pipeline.organize import delete_course, move_lecture
 from lecture_analyzer.qa_attachments import mark_used, save_attachment
 from lecture_analyzer.schemas import PageDigest
 
+from .test_locks import held_elsewhere
 from .test_web import _post
 from .test_web_analysis import _client
 
@@ -163,3 +167,41 @@ def test_answer_finished_after_cancel_is_not_written_back(m1_env, monkeypatch):
         course = library.course_by_id(m1_env.course_id)
         assert QAStore(library).thread(course, 1) == []
         assert JobStore(library).get(job.id).state == "cancelled"
+
+
+# ---------- T3b：改课件页和删整门课要与命令行处理互斥 ----------
+
+
+def test_set_pages_web_and_cli_respect_lecture_lock(m1_env):
+    client = _client(m1_env)
+    with Library(_db(m1_env)) as library:
+        course = library.update_course(m1_env.course_id, slides="provided")
+        store = MaterialStore(library)
+        material = store.add(course, "slides", "课件", "x.pdf")
+        store.set_file(material.id, "materials/x.pdf", 3)
+        library.set_step(m1_env.lecture_id, "slides", "done")
+    config = ["--config", str(m1_env.cfg.source)]
+    with held_elsewhere(lecture_lock(m1_env.cfg.data_dir, m1_env.lecture_id)):
+        refused = _post(client, f"/lectures/{m1_env.lecture_id}/pages", material=str(material.id), pages="1-2")
+        assert refused.status_code == 400 and "正在后台处理" in refused.text
+        cli = CliRunner().invoke(cli_app, ["lecture", "pages", "药理学", "3", "--auto", *config])
+        assert cli.exit_code == 1 and "正在后台处理" in cli.output
+        with Library(_db(m1_env)) as library:
+            assert MaterialStore(library).lecture_pages(m1_env.lecture_id) == []
+            assert library.lecture_by_id(m1_env.lecture_id).step_state("slides") == "done"
+    assert _post(client, f"/lectures/{m1_env.lecture_id}/pages", material=str(material.id), pages="1-2").status_code == 303
+
+
+@pytest.mark.parametrize("which", ["lecture", "memory"])
+def test_delete_course_waits_for_command_line_work(m1_env, which):
+    data_dir = m1_env.cfg.data_dir
+    path = lecture_lock(data_dir, m1_env.lecture_id) if which == "lecture" else memory_lock(data_dir, m1_env.course_id)
+    with Library(_db(m1_env)) as library:
+        course = library.course_by_id(m1_env.course_id)
+        with held_elsewhere(path):
+            with pytest.raises(LibraryError, match="再删除课程"):
+                delete_course(library, data_dir, course)
+        assert library.course_by_id(course.id)
+        delete_course(library, data_dir, course)
+    assert not lecture_lock(data_dir, m1_env.lecture_id).exists()
+    assert not memory_lock(data_dir, m1_env.course_id).exists()

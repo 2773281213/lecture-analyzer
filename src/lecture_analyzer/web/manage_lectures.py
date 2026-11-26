@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from ..books import export_course
-from ..library import LECTURE_KINDS, LibraryError
+from ..library import LECTURE_KINDS, LibraryError, PageRef
 from ..locks import UI_WAIT, hold, lecture_lock, memory_lock
 from ..materials import MaterialStore
 from ..pipeline.organize import delete_lecture, next_free_seq
@@ -110,9 +110,9 @@ async def set_pages(request: Request, lecture_id: int) -> RedirectResponse:
     with library_of(request) as library:
         lecture = library.lecture_by_id(lecture_id)
         store = MaterialStore(library)
-        if form.get("mode") == "auto":
-            store.set_lecture_pages(lecture_id, [], "auto")
-        else:
+        auto = form.get("mode") == "auto"
+        refs: list[PageRef] = []
+        if not auto:  # 校验都在锁外做完，提示用原来的 400，不必等锁
             material_id = int_field(form, "material", "资料")
             pages = form.get("pages", "").strip().replace(" ", "")
             if pages and not _PAGES.match(pages):
@@ -122,8 +122,10 @@ async def set_pages(request: Request, lecture_id: int) -> RedirectResponse:
                 refs = parse_page_spec(f"{material_id}:{pages}" if pages else str(material_id), materials)
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from None
-            store.set_lecture_pages(lecture_id, refs, "manual")
-        library.reset_steps(lecture_id, ["slides"])
+        busy = f"第 {lecture.seq} 讲正在后台处理，请等这一讲处理完，或在「后台任务」里暂停后再修改课件页"
+        with hold(lecture_lock(request.app.state.cfg.data_dir, lecture_id), wait=0, busy=busy):
+            store.set_lecture_pages(lecture_id, refs, "auto" if auto else "manual")
+            library.reset_steps(lecture_id, ["slides"])
     flash(request, "已修改对应的课件页：点「处理」按新的课件页重新整理笔记（课件页没变时不会重新整理）")
     return redirect(f"/lectures/{lecture_id}#manage")
 

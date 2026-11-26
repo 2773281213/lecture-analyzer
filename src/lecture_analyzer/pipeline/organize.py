@@ -185,14 +185,27 @@ def delete_course(library: Library, data_dir: Path, course: Course) -> None:
     ensure_idle(library, course, "删除课程")
     lectures = library.lectures(course)
     materials = MaterialStore(library).list(course)
-    library.delete_course(course.id)
-    for lecture in lectures:
-        shutil.rmtree(work_dir(data_dir, lecture.id), ignore_errors=True)
+    with ExitStack() as stack:  # 命令行正在处理这门课时（不经过任务表）也挡住：按 locks.py 的顺序加锁
+        for lecture in lectures:
+            stack.enter_context(hold(lecture_lock(data_dir, lecture.id), wait=0,
+                                     busy=f"第 {lecture.seq} 讲正在处理，请等它处理完再删除课程"))
+        for material in materials:
+            stack.enter_context(hold(material_lock(data_dir, material.id), wait=0,
+                                     busy=f"「{material.title}」正在处理，请等它处理完再删除课程"))
+        stack.enter_context(hold(materials_lock(data_dir, course.id), wait=UI_WAIT,
+                                 busy=f"「{course.name}」正在导入资料，请等导入完再删除课程"))
+        stack.enter_context(memory_free(data_dir, course, "删除课程"))
+        ensure_idle(library, course, "删除课程")  # 等锁期间可能有任务排队进来
+        library.delete_course(course.id)
+        for lecture in lectures:
+            shutil.rmtree(work_dir(data_dir, lecture.id), ignore_errors=True)
+        for material in materials:
+            shutil.rmtree(material_dir(data_dir, material.id), ignore_errors=True)
+        shutil.rmtree(course_dir(data_dir, course), ignore_errors=True)
+        shutil.rmtree(qa_attachments_root(data_dir) / str(course.id), ignore_errors=True)
+    for lecture in lectures:  # Windows 上关掉锁文件句柄后才能删除
         discard(lecture_lock(data_dir, lecture.id))
     for material in materials:
-        shutil.rmtree(material_dir(data_dir, material.id), ignore_errors=True)
         discard(material_lock(data_dir, material.id))
-    shutil.rmtree(course_dir(data_dir, course), ignore_errors=True)
-    shutil.rmtree(qa_attachments_root(data_dir) / str(course.id), ignore_errors=True)
     discard(memory_lock(data_dir, course.id))
     discard(materials_lock(data_dir, course.id))
